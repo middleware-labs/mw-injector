@@ -260,25 +260,34 @@ func (jp *JavaProcess) GetAgentInfo() *AgentInfo {
 
 // FormatAgentStatus returns a human-readable agent status string
 func (jp *JavaProcess) FormatAgentStatus() string {
+	var status string
+
 	if !jp.HasJavaAgent {
-		return "❌ None"
-	}
-
-	agentInfo := jp.GetAgentInfo()
-
-	switch agentInfo.Type {
-	case AgentMiddleware:
-		if agentInfo.IsServerless {
-			return "✅ MW (Serverless)"
+		status = "❌ None"
+	} else {
+		agentInfo := jp.GetAgentInfo()
+		switch agentInfo.Type {
+		case AgentMiddleware:
+			if agentInfo.IsServerless {
+				status = "✅ MW (Serverless)"
+			} else {
+				status = "✅ MW"
+			}
+		case AgentOpenTelemetry:
+			status = "✅ OTel"
+		case AgentOther:
+			status = "✅ Other"
+		default:
+			status = "⚠️ Unknown"
 		}
-		return "✅ MW"
-	case AgentOpenTelemetry:
-		return "✅ OTel"
-	case AgentOther:
-		return "✅ Other"
-	default:
-		return "⚠️ Unknown"
 	}
+
+	// Add container indicator
+	if jp.IsInContainer() {
+		status += fmt.Sprintf(" (📦 %s)", jp.GetContainerRuntime())
+	}
+
+	return status
 }
 
 // HasInstrumentation checks if the process has any form of instrumentation

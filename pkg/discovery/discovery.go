@@ -44,6 +44,34 @@ type JavaProcess struct {
 	MemoryPercent float32 `json:"process.memory.percent"`
 	CPUPercent    float64 `json:"process.cpu.percent"`
 	Status        string  `json:"process.status"`
+
+	ContainerInfo *ContainerInfo `json:container_info, omitempty`
+}
+
+// 2. Add these methods to JavaProcess (can go at the end of discovery.go)
+func (jp *JavaProcess) IsInContainer() bool {
+	return jp.ContainerInfo != nil && jp.ContainerInfo.IsContainer
+}
+
+func (jp *JavaProcess) GetContainerRuntime() string {
+	if jp.ContainerInfo != nil {
+		return jp.ContainerInfo.Runtime
+	}
+	return ""
+}
+
+func (jp *JavaProcess) GetContainerID() string {
+	if jp.ContainerInfo != nil {
+		return jp.ContainerInfo.ContainerID
+	}
+	return ""
+}
+
+func (jp *JavaProcess) GetContainerName() string {
+	if jp.ContainerInfo != nil {
+		return jp.ContainerInfo.ContainerName
+	}
+	return ""
 }
 
 // Discoverer defines the main interface for Java process discovery
@@ -80,6 +108,12 @@ type DiscoveryOptions struct {
 
 	// Filter specifies which processes to include/exclude
 	Filter ProcessFilter `json:"filter"`
+
+	// ExcludeContainers excludes processes running inside containers
+	ExcludeContainers bool `json:"exclude_containers"`
+
+	// IncludeContainerInfo includes container information for all processes
+	IncludeContainerInfo bool `json:"include_container_info"`
 }
 
 // ProcessFilter defines filtering criteria for process discovery
@@ -154,25 +188,31 @@ func DefaultDiscoveryOptions() DiscoveryOptions {
 }
 
 // NewDiscoverer creates a new process discoverer with default options
-func NewDiscoverer(ctx context.Context) *discoverer {
+func NewDiscoverer(ctx context.Context, opts DiscoveryOptions) *discoverer {
 	return NewDiscovererWithOptions(ctx, DefaultDiscoveryOptions())
 }
 
 // NewDiscovererWithOptions creates a new process discoverer with custom options
 func NewDiscovererWithOptions(ctx context.Context, opts DiscoveryOptions) *discoverer {
 	return &discoverer{
-		ctx:  ctx,
-		opts: opts,
+		ctx:               ctx,
+		opts:              opts,
+		containerDetector: NewContainerDetector(),
 	}
 }
 
 // Convenience functions for common use cases
 
-// FindAllJavaProcesses discovers all Java processes with default settings
+// FindAllJavaProcesses finds all Java processes, excluding those in containers
 func FindAllJavaProcesses(ctx context.Context) ([]JavaProcess, error) {
-	d := NewDiscoverer(ctx)
-	defer d.Close()
-	return d.DiscoverJavaProcesses(ctx)
+	opts := DefaultDiscoveryOptions()
+	opts.ExcludeContainers = true // This is the key change!
+	opts.IncludeContainerInfo = true
+
+	discoverer := NewDiscoverer(ctx, opts)
+	defer discoverer.Close()
+
+	return discoverer.DiscoverWithOptions(ctx, opts)
 }
 
 // FindCurrentUserJavaProcesses discovers Java processes for the current user only
