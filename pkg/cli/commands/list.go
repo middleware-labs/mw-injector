@@ -35,6 +35,7 @@ func (c *ListCommand) Execute() error {
 	fmt.Printf("Found %d Java processes:\n\n", len(processes))
 
 	for _, proc := range processes {
+		// pp.Println(proc)
 		fmt.Printf("PID: %d\n", proc.ProcessPID)
 		fmt.Printf("  Service: %s\n", proc.ServiceName)
 		fmt.Printf("  Owner: %s\n", proc.ProcessOwner)

@@ -14,8 +14,9 @@ import (
 
 // discoverer implements the Discoverer interface
 type discoverer struct {
-	ctx  context.Context
-	opts DiscoveryOptions
+	ctx               context.Context
+	opts              DiscoveryOptions
+	containerDetector *ContainerDetector
 }
 
 // DiscoverJavaProcesses finds all Java processes with default options
@@ -259,6 +260,34 @@ func (d *discoverer) processOne(ctx context.Context, proc *process.Process, opts
 		ProcessRuntimeDescription: "Java Virtual Machine",
 	}
 
+	// === CONTAINER DETECTION ===
+	if opts.IncludeContainerInfo || opts.ExcludeContainers {
+		containerInfo, err := d.containerDetector.IsProcessInContainer(javaProc.ProcessPID)
+		if err != nil {
+			// Log error but don't fail discovery
+			// In production, you might want to use a proper logger
+			fmt.Printf("Warning: Could not detect container info for PID %d: %v\n", javaProc.ProcessPID, err)
+		} else {
+			javaProc.ContainerInfo = containerInfo
+
+			// If we're excluding containers and this is in a container, return nil
+			if opts.ExcludeContainers && containerInfo.IsContainer {
+				return nil, fmt.Errorf("process %d is running in container, skipping", javaProc.ProcessPID)
+			}
+
+			// If container name is available, try to get it
+			if containerInfo.IsContainer && containerInfo.ContainerID != "" {
+				containerName := d.containerDetector.GetContainerNameByID(
+					containerInfo.ContainerID,
+					containerInfo.Runtime,
+				)
+				if containerName != "" {
+					javaProc.ContainerInfo.ContainerName = strings.TrimPrefix(containerName, "/")
+				}
+			}
+		}
+	}
+
 	// Extract Java-specific information
 	d.extractJavaInfo(javaProc, cmdArgs)
 
@@ -403,4 +432,29 @@ func (d *discoverer) passesFilter(proc JavaProcess, filter ProcessFilter) bool {
 	}
 
 	return true
+}
+
+// FindContainerJavaProcesses finds only Java processes running in containers
+func FindContainerJavaProcesses(ctx context.Context) ([]JavaProcess, error) {
+	opts := DefaultDiscoveryOptions()
+	opts.ExcludeContainers = false
+	opts.IncludeContainerInfo = true
+
+	discoverer := NewDiscovererWithOptions(ctx, opts)
+	defer discoverer.Close()
+
+	allProcesses, err := discoverer.DiscoverWithOptions(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter to only return container processes
+	var containerProcesses []JavaProcess
+	for _, proc := range allProcesses {
+		if proc.IsInContainer() {
+			containerProcesses = append(containerProcesses, proc)
+		}
+	}
+
+	return containerProcesses, nil
 }
