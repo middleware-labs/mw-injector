@@ -8,7 +8,7 @@ MW Injector automatically discovers, instruments, and manages Java applications 
 
 ```bash
 # List all Java processes
-sudo mw-injector list
+sudo mw-injector list-all
 
 # Auto-instrument everything (host processes)
 sudo mw-injector auto-instrument
