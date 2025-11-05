@@ -23,6 +23,163 @@ func NewUninstrumentCommand(config *types.CommandConfig) *UninstrumentCommand {
 	return &UninstrumentCommand{config: config}
 }
 
+// func (c *UninstrumentCommand) Execute() error {
+// 	ctx := context.Background()
+
+// 	// Check if running as root
+// 	if os.Geteuid() != 0 {
+// 		return fmt.Errorf("❌ This command requires root privileges\n   Run with: sudo mw-injector uninstrument")
+// 	}
+
+// 	reader := bufio.NewReader(os.Stdin)
+
+// 	// Discover processes
+// 	processes, err := discovery.FindAllJavaProcesses(ctx)
+// 	if err != nil {
+// 		return fmt.Errorf("❌ Error discovering processes: %v", err)
+// 	}
+
+// 	if len(processes) == 0 {
+// 		fmt.Println("No Running Java processes found")
+// 	}
+
+// 	fmt.Printf("\n🔍 Found %d Java processes\n\n", len(processes))
+
+// 	// Check for orphaned configs (services that are stopped/crashed)
+// 	orphanedConfigs := c.findOrphanedConfigs(processes)
+
+// 	if len(processes) == 0 && len(orphanedConfigs) == 0 {
+// 		fmt.Println("\nNo instrumented services found")
+// 		return nil
+// 	}
+
+// 	if len(orphanedConfigs) > 0 {
+// 		fmt.Printf("\n⚠️  Found %d orphaned configuration(s) for stopped/crashed services:\n\n", len(orphanedConfigs))
+// 	}
+
+// 	removed := 0
+// 	skipped := 0
+// 	servicesToRestart := []string{}
+
+// 	// Process orphaned configs first
+// 	for _, orphan := range orphanedConfigs {
+// 		fmt.Printf("⚠️  Orphaned config found\n")
+// 		fmt.Printf("   Service: %s (%s)\n", orphan.ServiceName, orphan.ConfigPath)
+// 		if orphan.IsTomcat {
+// 			fmt.Printf("   Type: Tomcat (service may be crashed)\n")
+// 		} else {
+// 			fmt.Printf("   Type: Systemd service (service may be stopped)\n")
+// 		}
+// 		fmt.Print("   Remove instrumentation? [y/N]: ")
+
+// 		response, _ := reader.ReadString('\n')
+// 		response = strings.TrimSpace(strings.ToLower(response))
+
+// 		if response == "y" || response == "yes" {
+// 			c.removeOrphanedConfig(orphan)
+// 			removed++
+
+// 			// Add to restart list
+// 			if orphan.IsTomcat {
+// 				servicesToRestart = append(servicesToRestart, "tomcat.service")
+// 			} else {
+// 				servicesToRestart = append(servicesToRestart, orphan.ServiceName+".service")
+// 			}
+// 		} else {
+// 			skipped++
+// 		}
+// 		fmt.Println()
+// 	}
+
+// 	// Now process running processes
+// 	if len(processes) > 0 {
+// 		fmt.Printf("\n📋 Processing running services:\n\n")
+// 	}
+
+// 	for _, proc := range processes {
+// 		configPath := c.getConfigPath(&proc)
+
+// 		// Check if configured
+// 		if !c.fileExists(configPath) {
+// 			fmt.Printf("⭐️  Skipping PID %d (%s) - not configured\n", proc.ProcessPID, proc.ServiceName)
+// 			skipped++
+// 			continue
+// 		}
+
+// 		fmt.Printf("⚠️  PID %d (%s) is instrumented\n", proc.ProcessPID, proc.ServiceName)
+// 		fmt.Print("   Remove instrumentation? [y/N]: ")
+
+// 		response, _ := reader.ReadString('\n')
+// 		response = strings.TrimSpace(strings.ToLower(response))
+
+// 		if response != "y" && response != "yes" {
+// 			fmt.Printf("⭐️  Skipping PID %d (%s)\n\n", proc.ProcessPID, proc.ServiceName)
+// 			skipped++
+// 			continue
+// 		}
+
+// 		// Remove config file
+// 		if err := os.Remove(configPath); err != nil {
+// 			fmt.Printf("❌ Failed to remove config for PID %d: %v\n", proc.ProcessPID, err)
+// 			continue
+// 		}
+// 		fmt.Printf("   Removed config: %s\n", configPath)
+
+// 		// Remove systemd drop-in
+// 		var systemdServiceName string
+// 		if proc.IsTomcat() {
+// 			systemdServiceName = systemd.GetTomcatServiceName()
+// 		} else {
+// 			systemdServiceName = systemd.GetServiceName(&proc)
+// 		}
+
+// 		// Remove systemd drop-in file
+// 		if err := systemd.RemoveDropIn(systemdServiceName); err != nil {
+// 			fmt.Printf("⚠️  Warning: Failed to remove systemd drop-in: %v\n", err)
+// 		}
+
+// 		if proc.IsTomcat() {
+// 			fmt.Printf("🗑️  Removed instrumentation from Tomcat\n")
+// 		} else {
+// 			serviceName := naming.GenerateServiceName(&proc)
+// 			fmt.Printf("🗑️  Removed instrumentation from: %s\n", serviceName)
+// 		}
+
+// 		servicesToRestart = append(servicesToRestart, systemdServiceName)
+// 		removed++
+// 		fmt.Println()
+// 	}
+
+// 	fmt.Printf("\n🎉 Uninstrumentation complete!\n")
+// 	fmt.Printf("   Removed: %d\n", removed)
+// 	fmt.Printf("   Skipped: %d\n", skipped)
+// 	fmt.Printf("   Total: %d\n", len(processes))
+
+// 	// Restart services
+// 	if len(servicesToRestart) > 0 {
+// 		fmt.Printf("\n🔄 Restarting %d service(s)...\n\n", len(servicesToRestart))
+
+// 		systemd.ReloadSystemd()
+
+// 		for _, service := range servicesToRestart {
+// 			fmt.Printf("   Restarting %s...", service)
+// 			err := systemd.RestartService(service)
+
+// 			if err != nil {
+// 				fmt.Printf(" ❌ Failed\n")
+// 				fmt.Printf("       Error: %v\n", err)
+// 				fmt.Printf("       Try manually: sudo systemctl restart %s\n", service)
+// 			} else {
+// 				fmt.Printf(" ✅ Done\n")
+// 			}
+// 		}
+// 		fmt.Println("\n✅ All services restarted!")
+// 	}
+
+//		return nil
+//	}
+//
+// Update the Execute method to use the new check:
 func (c *UninstrumentCommand) Execute() error {
 	ctx := context.Background()
 
@@ -97,11 +254,9 @@ func (c *UninstrumentCommand) Execute() error {
 	}
 
 	for _, proc := range processes {
-		configPath := c.getConfigPath(&proc)
-
-		// Check if configured
-		if !c.fileExists(configPath) {
-			fmt.Printf("⭐️  Skipping PID %d (%s) - not configured\n", proc.ProcessPID, proc.ServiceName)
+		// Check if configured (either config file OR drop-in exists)
+		if !c.isInstrumented(&proc) {
+			fmt.Printf("⭐️  Skipping PID %d (%s) - not instrumented\n", proc.ProcessPID, proc.ServiceName)
 			skipped++
 			continue
 		}
@@ -118,12 +273,15 @@ func (c *UninstrumentCommand) Execute() error {
 			continue
 		}
 
-		// Remove config file
-		if err := os.Remove(configPath); err != nil {
-			fmt.Printf("❌ Failed to remove config for PID %d: %v\n", proc.ProcessPID, err)
-			continue
+		// Remove config file if it exists
+		configPath := c.getConfigPath(&proc)
+		if c.fileExists(configPath) {
+			if err := os.Remove(configPath); err != nil {
+				fmt.Printf("❌ Failed to remove config for PID %d: %v\n", proc.ProcessPID, err)
+				continue
+			}
+			fmt.Printf("   Removed config: %s\n", configPath)
 		}
-		fmt.Printf("   Removed config: %s\n", configPath)
 
 		// Remove systemd drop-in
 		var systemdServiceName string
@@ -136,6 +294,8 @@ func (c *UninstrumentCommand) Execute() error {
 		// Remove systemd drop-in file
 		if err := systemd.RemoveDropIn(systemdServiceName); err != nil {
 			fmt.Printf("⚠️  Warning: Failed to remove systemd drop-in: %v\n", err)
+		} else {
+			fmt.Printf("   Removed drop-in: /etc/systemd/system/%s.d/middleware-instrumentation.conf\n", systemdServiceName)
 		}
 
 		if proc.IsTomcat() {
@@ -411,4 +571,23 @@ func (c *UninstrumentCommand) removeOrphanedConfig(config OrphanedConfig) {
 	// This will be implemented when we create the systemd package
 
 	fmt.Printf("   🗑️  Removed orphaned instrumentation for: %s\n", config.ServiceName)
+}
+
+func (c *UninstrumentCommand) getDropInPath(proc *discovery.JavaProcess) string {
+	var systemdServiceName string
+	if proc.IsTomcat() {
+		systemdServiceName = systemd.GetTomcatServiceName()
+	} else {
+		systemdServiceName = systemd.GetServiceName(proc)
+	}
+
+	return fmt.Sprintf("/etc/systemd/system/%s.d/middleware-instrumentation.conf", systemdServiceName)
+}
+
+func (c *UninstrumentCommand) isInstrumented(proc *discovery.JavaProcess) bool {
+	// Check if EITHER config file OR drop-in file exists
+	configPath := c.getConfigPath(proc)
+	dropInPath := c.getDropInPath(proc)
+
+	return c.fileExists(configPath) || c.fileExists(dropInPath)
 }
