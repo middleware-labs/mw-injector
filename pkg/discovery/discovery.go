@@ -206,7 +206,7 @@ func NewDiscovererWithOptions(ctx context.Context, opts DiscoveryOptions) *disco
 // FindAllJavaProcesses finds all Java processes, excluding those in containers
 func FindAllJavaProcesses(ctx context.Context) ([]JavaProcess, error) {
 	opts := DefaultDiscoveryOptions()
-	opts.ExcludeContainers = true // This is the key change!
+	opts.ExcludeContainers = false
 	opts.IncludeContainerInfo = true
 
 	discoverer := NewDiscoverer(ctx, opts)

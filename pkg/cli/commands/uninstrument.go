@@ -23,6 +23,7 @@ func NewUninstrumentCommand(config *types.CommandConfig) *UninstrumentCommand {
 	return &UninstrumentCommand{config: config}
 }
 
+// Update the Execute method to use the new check:
 func (c *UninstrumentCommand) Execute() error {
 	ctx := context.Background()
 
@@ -97,11 +98,9 @@ func (c *UninstrumentCommand) Execute() error {
 	}
 
 	for _, proc := range processes {
-		configPath := c.getConfigPath(&proc)
-
-		// Check if configured
-		if !c.fileExists(configPath) {
-			fmt.Printf("⭐️  Skipping PID %d (%s) - not configured\n", proc.ProcessPID, proc.ServiceName)
+		// Check if configured (either config file OR drop-in exists)
+		if !c.isInstrumented(&proc) {
+			fmt.Printf("⭐️  Skipping PID %d (%s) - not instrumented\n", proc.ProcessPID, proc.ServiceName)
 			skipped++
 			continue
 		}
@@ -118,12 +117,15 @@ func (c *UninstrumentCommand) Execute() error {
 			continue
 		}
 
-		// Remove config file
-		if err := os.Remove(configPath); err != nil {
-			fmt.Printf("❌ Failed to remove config for PID %d: %v\n", proc.ProcessPID, err)
-			continue
+		// Remove config file if it exists
+		configPath := c.getConfigPath(&proc)
+		if c.fileExists(configPath) {
+			if err := os.Remove(configPath); err != nil {
+				fmt.Printf("❌ Failed to remove config for PID %d: %v\n", proc.ProcessPID, err)
+				continue
+			}
+			fmt.Printf("   Removed config: %s\n", configPath)
 		}
-		fmt.Printf("   Removed config: %s\n", configPath)
 
 		// Remove systemd drop-in
 		var systemdServiceName string
@@ -136,6 +138,8 @@ func (c *UninstrumentCommand) Execute() error {
 		// Remove systemd drop-in file
 		if err := systemd.RemoveDropIn(systemdServiceName); err != nil {
 			fmt.Printf("⚠️  Warning: Failed to remove systemd drop-in: %v\n", err)
+		} else {
+			fmt.Printf("   Removed drop-in: /etc/systemd/system/%s.d/middleware-instrumentation.conf\n", systemdServiceName)
 		}
 
 		if proc.IsTomcat() {
@@ -411,4 +415,23 @@ func (c *UninstrumentCommand) removeOrphanedConfig(config OrphanedConfig) {
 	// This will be implemented when we create the systemd package
 
 	fmt.Printf("   🗑️  Removed orphaned instrumentation for: %s\n", config.ServiceName)
+}
+
+func (c *UninstrumentCommand) getDropInPath(proc *discovery.JavaProcess) string {
+	var systemdServiceName string
+	if proc.IsTomcat() {
+		systemdServiceName = systemd.GetTomcatServiceName()
+	} else {
+		systemdServiceName = systemd.GetServiceName(proc)
+	}
+
+	return fmt.Sprintf("/etc/systemd/system/%s.d/middleware-instrumentation.conf", systemdServiceName)
+}
+
+func (c *UninstrumentCommand) isInstrumented(proc *discovery.JavaProcess) bool {
+	// Check if EITHER config file OR drop-in file exists
+	configPath := c.getConfigPath(proc)
+	dropInPath := c.getDropInPath(proc)
+
+	return c.fileExists(configPath) || c.fileExists(dropInPath)
 }

@@ -535,13 +535,6 @@ type ConfigAutoInstrumentCommand struct {
 	configPath string
 }
 
-// func NewConfigAutoInstrumentCommand(config *types.CommandConfig, configPath string) *ConfigAutoInstrumentCommand {
-// 	return &ConfigAutoInstrumentCommand{
-// 		config:     config,
-// 		configPath: configPath,
-// 	}
-// }
-
 func NewConfigAutoInstrumentCommand(config *types.CommandConfig, configPath string) *ConfigAutoInstrumentCommand {
 	// If no config path provided, try to find default
 	if configPath == "" {

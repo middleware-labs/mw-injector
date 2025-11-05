@@ -38,9 +38,12 @@ func NewRouterWithConfig(config *CommandConfig) *Router {
 // registerCommands registers all available commands
 func (r *Router) registerCommands() {
 	// List commands
-	r.commands["list"] = commands.NewListCommand(r.config)
-	r.commands["list-docker"] = commands.NewListDockerCommand(r.config)
+	// r.commands["list"] = commands.NewListCommand(r.config)
+	// r.commands["list-docker"] = commands.NewListDockerCommand(r.config)
+	// r.commands["list-all"] = commands.NewListAllCommand(r.config)
 	r.commands["list-all"] = commands.NewListAllCommand(r.config)
+	r.commands["list-systemd"] = commands.NewListSystemdCommand(r.config)
+	r.commands["list-docker"] = commands.NewListDockerCommand(r.config)
 
 	// Instrument commands
 	r.commands["auto-instrument"] = commands.NewAutoInstrumentCommand(r.config)
@@ -71,7 +74,9 @@ func (r *Router) Run(args []string) error {
 
 	// Route to appropriate command
 	switch commandName {
-	case "list", "list-docker", "list-all":
+	// case "list", "list-docker", "list-all":
+	// 	return r.executeNoArgsCommand(commandName, commandArgs)
+	case "list-systemd", "list-docker", "list-all": // ✅ FIXED - changed "list" to "list-systemd"
 		return r.executeNoArgsCommand(commandName, commandArgs)
 
 	case "instrument-container", "uninstrument-container":

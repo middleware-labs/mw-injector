@@ -70,7 +70,7 @@ func TestJavaProcessFormatAgentStatus(t *testing.T) {
 		{
 			name:           "No agent",
 			process:        discovery.JavaProcess{HasJavaAgent: false},
-			expectedStatus: "❌ None",
+			expectedStatus: "[x] None",
 		},
 		{
 			name: "Middleware agent",
