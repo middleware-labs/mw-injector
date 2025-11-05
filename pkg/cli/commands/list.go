@@ -111,9 +111,9 @@ func (c *ListDockerCommand) printContainer(container *discovery.DockerContainer)
 	}
 
 	if container.Instrumented {
-		fmt.Printf("  Status: ✅ Instrumented\n")
+		fmt.Printf("  Status: [✓] Instrumented\n")
 	} else {
-		fmt.Printf("  Status: ⚠️  Not instrumented\n")
+		fmt.Printf("  Status: [!] Not instrumented\n")
 	}
 
 	fmt.Println()
@@ -170,9 +170,9 @@ func (c *ListAllCommand) Execute() error {
 		c.printDockerSection(containers)
 	} else {
 		fmt.Printf("\n╔══════════════════════════════════════════════════════════════════════╗\n")
-		fmt.Printf("║                         🐳 DOCKER CONTAINERS                         ║\n")
+		fmt.Printf("║                       [DOCKER] CONTAINERS                            ║\n")
 		fmt.Printf("╚══════════════════════════════════════════════════════════════════════╝\n\n")
-		fmt.Printf("⚠️  Unable to list Docker containers: %v\n\n", dockerErr)
+		fmt.Printf("[!] Unable to list Docker containers: %v\n\n", dockerErr)
 	}
 
 	// Print summary
@@ -188,14 +188,14 @@ func (c *ListAllCommand) GetDescription() string {
 func (c *ListAllCommand) printHeader() {
 	fmt.Println()
 	fmt.Println("╔══════════════════════════════════════════════════════════════════════╗")
-	fmt.Println("║                    ☕ JAVA PROCESS INVENTORY                         ║")
+	fmt.Println("║                    [JAVA] PROCESS INVENTORY                          ║")
 	fmt.Println("╚══════════════════════════════════════════════════════════════════════╝")
 	fmt.Println()
 }
 
 func (c *ListAllCommand) printTomcatSection(processes []discovery.JavaProcess) {
 	fmt.Printf("╔══════════════════════════════════════════════════════════════════════╗\n")
-	fmt.Printf("║                    🐱 TOMCAT INSTANCES (Standalone)                  ║\n")
+	fmt.Printf("║                  [TOMCAT] INSTANCES (Standalone)                     ║\n")
 	fmt.Printf("╚══════════════════════════════════════════════════════════════════════╝\n\n")
 
 	if len(processes) == 0 {
@@ -213,7 +213,7 @@ func (c *ListAllCommand) printTomcatSection(processes []discovery.JavaProcess) {
 
 func (c *ListAllCommand) printSystemdSection(processes []discovery.JavaProcess) {
 	fmt.Printf("╔══════════════════════════════════════════════════════════════════════╗\n")
-	fmt.Printf("║                   ⚙️  SYSTEMD SERVICES (inc. Tomcat)                 ║\n")
+	fmt.Printf("║                  [SYSTEMD] SERVICES (inc. Tomcat)                    ║\n")
 	fmt.Printf("╚══════════════════════════════════════════════════════════════════════╝\n\n")
 
 	if len(processes) == 0 {
@@ -244,7 +244,7 @@ func (c *ListAllCommand) printSystemdSection(processes []discovery.JavaProcess) 
 
 func (c *ListAllCommand) printDockerSection(containers []discovery.DockerContainer) {
 	fmt.Printf("╔══════════════════════════════════════════════════════════════════════╗\n")
-	fmt.Printf("║                        🐳 DOCKER CONTAINERS                          ║\n")
+	fmt.Printf("║                       [DOCKER] CONTAINERS                            ║\n")
 	fmt.Printf("╚══════════════════════════════════════════════════════════════════════╝\n\n")
 
 	if len(containers) == 0 {
@@ -265,7 +265,7 @@ func (c *ListAllCommand) printTomcatProcess(proc *discovery.JavaProcess, index, 
 
 	// Draw box
 	fmt.Printf("  ┌─────────────────────────────────────────────────────────────────┐\n")
-	fmt.Printf("  │ 🐱 Tomcat Instance (%d/%d)%s│\n", index, total, strings.Repeat(" ", 42-len(fmt.Sprintf("%d/%d", index, total))))
+	fmt.Printf("  │ [TOMCAT] Instance (%d/%d)%s│\n", index, total, strings.Repeat(" ", 44-len(fmt.Sprintf("%d/%d", index, total))))
 	fmt.Printf("  ├─────────────────────────────────────────────────────────────────┤\n")
 
 	fmt.Printf("  │  Instance Name: %-48s│\n", truncate(tomcatInfo.InstanceName, 48))
@@ -293,12 +293,26 @@ func (c *ListAllCommand) printTomcatProcess(proc *discovery.JavaProcess, index, 
 	}
 
 	// Config status
+	// configPath := c.getConfigPath(*proc)
+	// if c.fileExists(configPath) {
+	// 	fmt.Printf("  │  Config:        [✓] %-44s│\n", truncate("Configured", 44))
+	// 	fmt.Printf("  │  Path:          %-48s│\n", truncate(configPath, 48))
+	// } else {
+	// 	fmt.Printf("  │  Config:        [✗] %-44s│\n", truncate("Not configured", 44))
+	// }
 	configPath := c.getConfigPath(*proc)
+	var configStatus string // Create a single status string
 	if c.fileExists(configPath) {
-		fmt.Printf("  │  Config:        ✅ %-46s│\n", truncate("Configured", 46))
-		fmt.Printf("  │  Path:          %-48s│\n", truncate(configPath, 48))
+		configStatus = "[v] Configured"
 	} else {
-		fmt.Printf("  │  Config:        ❌ %-46s│\n", truncate("Not configured", 46))
+		configStatus = "[x] Not configured"
+	}
+	// Print the single string
+	fmt.Printf("  │  Config:        %-48s│\n", truncate(configStatus, 48))
+
+	// If you still want to show the path when configured, add this:
+	if c.fileExists(configPath) {
+		fmt.Printf("  │  Path:          %-48s│\n", truncate(configPath, 48))
 	}
 
 	fmt.Printf("  └─────────────────────────────────────────────────────────────────┘\n\n")
@@ -310,9 +324,9 @@ func (c *ListAllCommand) printSystemdProcess(proc *discovery.JavaProcess, index,
 
 	// Show type badge (Tomcat or regular Systemd)
 	if proc.IsTomcat() {
-		fmt.Printf("  │ 🐱 Tomcat Service (%d/%d)%s│\n", index, total, strings.Repeat(" ", 42-len(fmt.Sprintf("%d/%d", index, total))))
+		fmt.Printf("  │ [TOMCAT] Service (%d/%d)%s│\n", index, total, strings.Repeat(" ", 45-len(fmt.Sprintf("%d/%d", index, total))))
 	} else {
-		fmt.Printf("  │ ⚙️  Systemd Service (%d/%d)%s│\n", index, total, strings.Repeat(" ", 42-len(fmt.Sprintf("%d/%d", index, total))))
+		fmt.Printf("  │ [SYSTEMD] Service (%d/%d)%s│\n", index, total, strings.Repeat(" ", 44-len(fmt.Sprintf("%d/%d", index, total))))
 	}
 
 	fmt.Printf("  ├─────────────────────────────────────────────────────────────────┤\n")
@@ -358,10 +372,10 @@ func (c *ListAllCommand) printSystemdProcess(proc *discovery.JavaProcess, index,
 	// Config status
 	configPath := c.getConfigPath(*proc)
 	if c.fileExists(configPath) {
-		fmt.Printf("  │  Config:        ✅ %-46s│\n", truncate("Configured", 46))
+		fmt.Printf("  │  Config:        [✓] %-44s│\n", truncate("Configured", 44))
 		fmt.Printf("  │  Path:          %-48s│\n", truncate(configPath, 48))
 	} else {
-		fmt.Printf("  │  Config:        ❌ %-46s│\n", truncate("Not configured", 46))
+		fmt.Printf("  │  Config:        [✗] %-44s│\n", truncate("Not configured", 44))
 	}
 
 	fmt.Printf("  └─────────────────────────────────────────────────────────────────┘\n\n")
@@ -370,7 +384,7 @@ func (c *ListAllCommand) printSystemdProcess(proc *discovery.JavaProcess, index,
 func (c *ListAllCommand) printDockerContainer(container *discovery.DockerContainer, index, total int) {
 	// Draw box
 	fmt.Printf("  ┌─────────────────────────────────────────────────────────────────┐\n")
-	fmt.Printf("  │ 🐳 Docker Container (%d/%d)%s│\n", index, total, strings.Repeat(" ", 42-len(fmt.Sprintf("%d/%d", index, total))))
+	fmt.Printf("  │ [DOCKER] Container (%d/%d)%s│\n", index, total, strings.Repeat(" ", 43-len(fmt.Sprintf("%d/%d", index, total))))
 	fmt.Printf("  ├─────────────────────────────────────────────────────────────────┤\n")
 
 	fmt.Printf("  │  Name:          %-48s│\n", truncate(container.ContainerName, 48))
@@ -400,9 +414,9 @@ func (c *ListAllCommand) printDockerContainer(container *discovery.DockerContain
 
 	// Instrumentation status
 	if container.Instrumented {
-		fmt.Printf("  │  Status:        ✅ %-46s│\n", truncate("Instrumented", 46))
+		fmt.Printf("  │  Status:        [✓] %-44s│\n", truncate("Instrumented", 44))
 	} else {
-		fmt.Printf("  │  Status:        ⚠️  %-45s│\n", truncate("Not instrumented", 45))
+		fmt.Printf("  │  Status:        [!] %-44s│\n", truncate("Not instrumented", 44))
 	}
 
 	fmt.Printf("  └─────────────────────────────────────────────────────────────────┘\n\n")
@@ -417,7 +431,7 @@ func (c *ListAllCommand) printSummary(tomcatCount, systemdCount, dockerCount int
 
 	fmt.Printf("  Total Processes:      %d\n", totalCount)
 	fmt.Printf("    🐱 Standalone Tomcat: %d\n", tomcatCount)
-	fmt.Printf("    ⚙️  Systemd Services: %d\n", systemdCount)
+	fmt.Printf("    🔧 Systemd Services:  %d\n", systemdCount)
 	fmt.Printf("    🐳 Docker Containers: %d\n", dockerCount)
 	fmt.Println()
 }
@@ -430,7 +444,7 @@ func (c *ListSystemdCommand) printProcess(proc *discovery.JavaProcess) {
 	// Show if it's Tomcat
 	if proc.IsTomcat() {
 		tomcatInfo := proc.ExtractTomcatInfo()
-		fmt.Printf("  Type: 🐱 Tomcat\n")
+		fmt.Printf("  Type: [TOMCAT]\n")
 		if tomcatInfo.InstanceName != "" {
 			fmt.Printf("  Instance: %s\n", tomcatInfo.InstanceName)
 		}
@@ -450,9 +464,9 @@ func (c *ListSystemdCommand) printProcess(proc *discovery.JavaProcess) {
 	// Check if configured
 	configPath := c.getConfigPath(proc)
 	if c.fileExists(configPath) {
-		fmt.Printf("  Config: ✅ %s\n", configPath)
+		fmt.Printf("  Config: [✓] %s\n", configPath)
 	} else {
-		fmt.Printf("  Config: ❌ Not configured\n")
+		fmt.Printf("  Config: [✗] Not configured\n")
 	}
 
 	fmt.Println()
