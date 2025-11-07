@@ -165,6 +165,9 @@ func (c *AutoInstrumentCommand) Execute() error {
 				fmt.Printf("✅ Configured Tomcat: %s\n", serviceName)
 				configured++
 			}
+		} else if proc.IsInContainer() {
+			fmt.Println("Skipping service running inside a container")
+			skipped++
 		} else {
 			serviceName := naming.GenerateServiceName(&proc)
 			systemdServiceName = systemd.GetServiceName(&proc)
@@ -686,6 +689,9 @@ func (c *ConfigAutoInstrumentCommand) Execute() error {
 				fmt.Printf("✅ Configured Tomcat: %s\n", serviceName)
 				configured++
 			}
+		} else if proc.IsInContainer() {
+			fmt.Println("Skipping service running inside a container.")
+			skipped++
 		} else {
 			serviceName := naming.GenerateServiceName(&proc)
 			systemdServiceName = systemd.GetServiceName(&proc)

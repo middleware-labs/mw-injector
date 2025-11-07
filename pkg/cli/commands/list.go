@@ -292,14 +292,6 @@ func (c *ListAllCommand) printTomcatProcess(proc *discovery.JavaProcess, index, 
 		}
 	}
 
-	// Config status
-	// configPath := c.getConfigPath(*proc)
-	// if c.fileExists(configPath) {
-	// 	fmt.Printf("  │  Config:        [✓] %-44s│\n", truncate("Configured", 44))
-	// 	fmt.Printf("  │  Path:          %-48s│\n", truncate(configPath, 48))
-	// } else {
-	// 	fmt.Printf("  │  Config:        [✗] %-44s│\n", truncate("Not configured", 44))
-	// }
 	configPath := c.getConfigPath(*proc)
 	var configStatus string // Create a single status string
 	if c.fileExists(configPath) {
@@ -362,7 +354,7 @@ func (c *ListAllCommand) printSystemdProcess(proc *discovery.JavaProcess, index,
 
 	// Agent status
 	agentStatus := proc.FormatAgentStatus()
-	fmt.Printf("  │  Agent:         %-48s│\n", truncate(agentStatus, 48))
+	fmt.Printf("  │  Agent:         %-46s│\n", truncate(agentStatus, 46))
 
 	if proc.HasJavaAgent {
 		agentInfo := proc.GetAgentInfo()
