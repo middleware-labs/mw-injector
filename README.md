@@ -136,8 +136,8 @@ sudo mw-injector list-all
 sudo mw-injector auto-instrument
 # Enter your Middleware.io API key when prompted
 
-# 3. Verify instrumentation
-sudo mw-injector list
+# 3. Verify instrumentation, it would show the instrumented services
+sudo mw-injector list-all
 
 # 4. Check your Middleware.io dashboard
 # 🎉 Data should be flowing
@@ -157,7 +157,7 @@ sudo mw-injector uninstrument-docker
 
 ### Cleanup
 ```bash
-# Remove all instrumentation
+# Remove all systemd instrumentation
 sudo mw-injector uninstrument
 
 # Remove Docker instrumentation
@@ -174,22 +174,6 @@ MW Injector is built with a modular architecture:
 - **Systemd Integration**: Manages service configuration and restarts
 - **State Management**: Tracks instrumentation state and handles cleanup
 
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file for details.
-
-## 🆘 Support
-
-- 📖 [Documentation](docs/)
-- 🐛 [Issue Tracker](https://github.com/your-org/mw-injector/issues)
-- 💬 [Discussions](https://github.com/your-org/mw-injector/discussions)
-- 📧 [Email Support](mailto:support@middleware.io)
-
----
 
 **Built with ❤️  and way too much nicotine on sleepless nights**
 
