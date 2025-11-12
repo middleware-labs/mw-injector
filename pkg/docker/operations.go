@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
 	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/config"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
@@ -29,15 +32,21 @@ type DockerOperations struct {
 	ctx           context.Context
 	discoverer    *discovery.DockerDiscoverer
 	hostAgentPath string
+	cli           client.Client
 }
 
 // NewDockerOperations creates a new Docker operations handler
-func NewDockerOperations(ctx context.Context, hostAgentPath string) *DockerOperations {
+func NewDockerOperations(ctx context.Context, hostAgentPath string) (*DockerOperations, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return nil, fmt.Errorf("could not create a client for docker operations %v", err.Error())
+	}
 	return &DockerOperations{
 		ctx:           ctx,
 		discoverer:    discovery.NewDockerDiscoverer(ctx),
 		hostAgentPath: hostAgentPath,
-	}
+		cli:           *cli,
+	}, nil
 }
 
 // InstrumentedState represents the state of instrumented containers
@@ -180,7 +189,7 @@ func (do *DockerOperations) instrumentStandaloneContainer(container *discovery.D
 	}
 
 	// Step 7: Recreate container with instrumentation using the committed image
-	instrumentedRunCommand := do.buildInstrumentedDockerRunCommand(containerConfig, newEnv, container.ContainerName, newImageName)
+	instrumentedRunCommand := do.buildInstrumentedDockerRunCommand(*containerConfig, newEnv, container.ContainerName, newImageName)
 	if err := do.runContainer(instrumentedRunCommand); err != nil {
 		return fmt.Errorf("failed to recreate container: %w", err)
 	}
@@ -195,10 +204,13 @@ func (do *DockerOperations) instrumentStandaloneContainer(container *discovery.D
 }
 
 // buildInstrumentedDockerRunCommand creates docker run command with instrumentation
-func (do *DockerOperations) buildInstrumentedDockerRunCommand(config map[string]interface{}, env map[string]string, containerName, imageName string) string {
+func (do *DockerOperations) buildInstrumentedDockerRunCommand(config container.InspectResponse, env map[string]string, containerName, imageName string) string {
+	pp.Println("BUILDING INSTRUMENTED DOCKER RUN COMMAND")
 	var cmdParts []string
 	cmdParts = append(cmdParts, "docker", "run", "-d")
 	cmdParts = append(cmdParts, "--name", containerName)
+
+	configSection := config.Config
 
 	// Add environment variables (with instrumentation)
 	for k, v := range env {
@@ -206,19 +218,14 @@ func (do *DockerOperations) buildInstrumentedDockerRunCommand(config map[string]
 	}
 
 	// Add original volume mounts
-	if mounts, ok := config["Mounts"].([]interface{}); ok {
-		for _, m := range mounts {
-			if mount, ok := m.(map[string]interface{}); ok {
-				src, srcOk := mount["Source"].(string)
-				dst, dstOk := mount["Destination"].(string)
-
-				if srcOk && dstOk {
-					mode := "rw"
-					if rw, ok := mount["RW"].(bool); ok && !rw {
-						mode = "ro"
-					}
-					cmdParts = append(cmdParts, "-v", fmt.Sprintf("%s:%s:%s", src, dst, mode))
+	if len(config.Mounts) > 0 {
+		for _, m := range config.Mounts {
+			if m.Source != "" && m.Destination != "" {
+				mode := "rw"
+				if !m.RW {
+					mode = "ro"
 				}
+				cmdParts = append(cmdParts, "-v", fmt.Sprintf("%s:%s:%s", m.Source, m.Destination, mode))
 			}
 		}
 	}
@@ -227,18 +234,17 @@ func (do *DockerOperations) buildInstrumentedDockerRunCommand(config map[string]
 	cmdParts = append(cmdParts, "-v", fmt.Sprintf("%s:%s:ro", do.hostAgentPath, DefaultContainerAgentPath))
 
 	// Add port mappings
-	if networkSettings, ok := config["NetworkSettings"].(map[string]interface{}); ok {
-		if ports, ok := networkSettings["Ports"].(map[string]interface{}); ok {
+	if networkSettings := config.NetworkSettings; networkSettings != nil {
+		if ports := networkSettings.Ports; ports != nil {
 			for containerPort, bindings := range ports {
-				if bindingList, ok := bindings.([]interface{}); ok && len(bindingList) > 0 {
-					if binding, ok := bindingList[0].(map[string]interface{}); ok {
-						if hostPort, ok := binding["HostPort"].(string); ok && hostPort != "" {
-							hostIP := "0.0.0.0"
-							if hip, ok := binding["HostIp"].(string); ok && hip != "" {
-								hostIP = hip
-							}
-							cmdParts = append(cmdParts, "-p", fmt.Sprintf("%s:%s:%s", hostIP, hostPort, containerPort))
+				if len(bindings) > 0 {
+					binding := bindings[0]
+					if binding.HostPort != "" {
+						hostIP := "0.0.0.0"
+						if binding.HostIP != "" {
+							hostIP = binding.HostIP
 						}
+						cmdParts = append(cmdParts, "-p", fmt.Sprintf("%s:%s:%s", hostIP, binding.HostPort, containerPort))
 					}
 				}
 			}
@@ -246,9 +252,9 @@ func (do *DockerOperations) buildInstrumentedDockerRunCommand(config map[string]
 	}
 
 	// Add networks
-	if networkSettings, ok := config["NetworkSettings"].(map[string]interface{}); ok {
-		if networks, ok := networkSettings["Networks"].(map[string]interface{}); ok {
-			for networkName := range networks {
+	if config.NetworkSettings != nil {
+		if networks := config.NetworkSettings.Networks; networks != nil {
+			for networkName := range config.NetworkSettings.Networks {
 				if networkName != "bridge" {
 					cmdParts = append(cmdParts, "--network", networkName)
 				}
@@ -257,43 +263,37 @@ func (do *DockerOperations) buildInstrumentedDockerRunCommand(config map[string]
 	}
 
 	// Add restart policy
-	if hostConfig, ok := config["HostConfig"].(map[string]interface{}); ok {
-		if restartPolicy, ok := hostConfig["RestartPolicy"].(map[string]interface{}); ok {
-			if name, ok := restartPolicy["Name"].(string); ok && name != "" && name != "no" {
-				if maxRetries, ok := restartPolicy["MaximumRetryCount"].(float64); ok && maxRetries > 0 {
-					cmdParts = append(cmdParts, "--restart", fmt.Sprintf("%s:%d", name, int(maxRetries)))
-				} else {
-					cmdParts = append(cmdParts, "--restart", name)
-				}
-			}
-		}
 
-		// Add working directory
-		if configSection, ok := config["Config"].(map[string]interface{}); ok {
-			if workingDir, ok := configSection["WorkingDir"].(string); ok && workingDir != "" {
-				cmdParts = append(cmdParts, "--workdir", workingDir)
-			}
-
-			// Add user
-			if user, ok := configSection["User"].(string); ok && user != "" {
-				cmdParts = append(cmdParts, "--user", user)
-			}
-
-			// Add original command
-			if cmd, ok := configSection["Cmd"].([]interface{}); ok && len(cmd) > 0 {
-				cmdParts = append(cmdParts, imageName)
-				for _, c := range cmd {
-					if cStr, ok := c.(string); ok {
-						cmdParts = append(cmdParts, cStr)
-					}
-				}
-				return strings.Join(cmdParts, " ")
+	if hostConfig := config.HostConfig; hostConfig != nil {
+		if name := hostConfig.RestartPolicy.Name; name != "" && name != "no" {
+			if maxRetries := hostConfig.RestartPolicy.MaximumRetryCount; maxRetries > 0 {
+				cmdParts = append(cmdParts, "--restart", fmt.Sprintf("%s:%d", name, int(maxRetries)))
+			} else {
+				cmdParts = append(cmdParts, "--restart", string(name))
 			}
 		}
 	}
 
+	if workingDir := configSection.WorkingDir; workingDir != "" {
+		cmdParts = append(cmdParts, "--workdir", workingDir)
+	}
+
+	if user := configSection.User; user != "" {
+		cmdParts = append(cmdParts, "--user", user)
+	}
+
 	// Add image
-	cmdParts = append(cmdParts, imageName)
+	if image := configSection.Image; image != "" {
+		cmdParts = append(cmdParts, image)
+	}
+
+	if cmd := configSection.Cmd; len(cmd) > 0 {
+		for _, c := range cmd {
+			cmdParts = append(cmdParts, c)
+		}
+	}
+
+	pp.Println("ORIGINAL COMMAND: ", strings.Join(cmdParts, " "))
 
 	return strings.Join(cmdParts, " ")
 }
@@ -369,77 +369,61 @@ func (do *DockerOperations) instrumentComposeContainer(container *discovery.Dock
 }
 
 // buildOriginalDockerRunCommand creates the original docker run command before instrumentation
-func (do *DockerOperations) buildOriginalDockerRunCommand(config map[string]interface{}, containerName string) string {
+func (do *DockerOperations) buildOriginalDockerRunCommand(config *container.InspectResponse, containerName string) string {
 	var cmdParts []string
 	cmdParts = append(cmdParts, "docker", "run", "-d")
 	cmdParts = append(cmdParts, "--name", containerName)
 
-	configSection, ok := config["Config"].(map[string]interface{})
-	if !ok {
-		return ""
-	}
+	configSection := config.Config
 
 	// Add original environment variables (without instrumentation)
-	if env, ok := configSection["Env"].([]interface{}); ok {
-		for _, e := range env {
-			if envStr, ok := e.(string); ok {
-				// Skip any existing MW_ or OTEL_ variables and JAVA_TOOL_OPTIONS with javaagent
-				if !strings.HasPrefix(envStr, "MW_") &&
-					!strings.HasPrefix(envStr, "OTEL_") &&
-					!(strings.HasPrefix(envStr, "JAVA_TOOL_OPTIONS=") && strings.Contains(envStr, "javaagent")) {
-					cmdParts = append(cmdParts, "-e", envStr)
-				}
-			}
+	for _, e := range configSection.Env {
+		if !strings.HasPrefix(e, "MW_") &&
+			!strings.HasPrefix(e, "OTEL_") &&
+			!(strings.HasPrefix(e, "JAVA_TOOL_OPTIONS=") && strings.Contains(e, "javaagent")) {
+
+			cmdParts = append(cmdParts, "-e", e)
 		}
 	}
 
 	// Add original volume mounts (excluding our agent mount)
-	if mounts, ok := config["Mounts"].([]interface{}); ok {
-		for _, m := range mounts {
-			if mount, ok := m.(map[string]interface{}); ok {
-				src, srcOk := mount["Source"].(string)
-				dst, dstOk := mount["Destination"].(string)
+	for _, mount := range config.Mounts {
+		src := mount.Source
+		dst := mount.Destination
 
-				if srcOk && dstOk {
-					// Skip our agent mount
-					if dst == DefaultContainerAgentPath {
-						continue
-					}
-
-					mode := "rw"
-					if rw, ok := mount["RW"].(bool); ok && !rw {
-						mode = "ro"
-					}
-					cmdParts = append(cmdParts, "-v", fmt.Sprintf("%s:%s:%s", src, dst, mode))
-				}
+		if src != "" && dst != "" {
+			if dst == DefaultContainerAgentPath {
+				continue
 			}
+			mode := "rw"
+			if !mount.RW {
+				mode = "ro"
+			}
+			cmdParts = append(cmdParts, "-v", fmt.Sprintf("%s:%s:%s", src, dst, mode))
 		}
 	}
 
 	// Add port mappings
-	if networkSettings, ok := config["NetworkSettings"].(map[string]interface{}); ok {
-		if ports, ok := networkSettings["Ports"].(map[string]interface{}); ok {
-			for containerPort, bindings := range ports {
-				if bindingList, ok := bindings.([]interface{}); ok && len(bindingList) > 0 {
-					if binding, ok := bindingList[0].(map[string]interface{}); ok {
-						if hostPort, ok := binding["HostPort"].(string); ok && hostPort != "" {
-							hostIP := "0.0.0.0"
-							if hip, ok := binding["HostIp"].(string); ok && hip != "" {
-								hostIP = hip
-							}
-							cmdParts = append(cmdParts, "-p", fmt.Sprintf("%s:%s:%s", hostIP, hostPort, containerPort))
-						}
+	if config.NetworkSettings != nil {
+		for containerPort, bindings := range config.NetworkSettings.NetworkSettingsBase.Ports {
+			if len(bindings) > 0 {
+				binding := bindings[0]
+				if binding.HostPort != "" {
+					hostIP := "0.0.0.0"
+					if binding.HostIP != "" {
+						hostIP = binding.HostIP
 					}
+					cmdParts = append(cmdParts, "-p", fmt.Sprintf("%s:%s:%s", hostIP, binding.HostPort, containerPort))
 				}
 			}
 		}
 	}
 
 	// Add networks
-	if networkSettings, ok := config["NetworkSettings"].(map[string]interface{}); ok {
-		if networks, ok := networkSettings["Networks"].(map[string]interface{}); ok {
-			for networkName := range networks {
-				if networkName != "bridge" { // Skip default bridge network
+	if config.NetworkSettings != nil {
+		if config.NetworkSettings.Networks != nil {
+			for networkName := range config.NetworkSettings.Networks {
+				if networkName != "bridge" {
 					cmdParts = append(cmdParts, "--network", networkName)
 				}
 			}
@@ -447,42 +431,37 @@ func (do *DockerOperations) buildOriginalDockerRunCommand(config map[string]inte
 	}
 
 	// Add restart policy
-	if hostConfig, ok := config["HostConfig"].(map[string]interface{}); ok {
-		if restartPolicy, ok := hostConfig["RestartPolicy"].(map[string]interface{}); ok {
-			if name, ok := restartPolicy["Name"].(string); ok && name != "" && name != "no" {
-				if maxRetries, ok := restartPolicy["MaximumRetryCount"].(float64); ok && maxRetries > 0 {
-					cmdParts = append(cmdParts, "--restart", fmt.Sprintf("%s:%d", name, int(maxRetries)))
-				} else {
-					cmdParts = append(cmdParts, "--restart", name)
-				}
+	if hostConfig := config.HostConfig; hostConfig != nil {
+		if name := hostConfig.RestartPolicy.Name; name != "" && name != "no" {
+			if maxRetries := hostConfig.RestartPolicy.MaximumRetryCount; maxRetries > 0 {
+				cmdParts = append(cmdParts, "--restart", fmt.Sprintf("%s:%d", name, int(maxRetries)))
+			} else {
+				cmdParts = append(cmdParts, "--restart", string(name))
 			}
 		}
 
-		// Add working directory
-		if workingDir, ok := configSection["WorkingDir"].(string); ok && workingDir != "" {
-			cmdParts = append(cmdParts, "--workdir", workingDir)
-		}
+	}
 
-		// Add user
-		if user, ok := configSection["User"].(string); ok && user != "" {
-			cmdParts = append(cmdParts, "--user", user)
-		}
+	if workingDir := configSection.WorkingDir; workingDir != "" {
+		cmdParts = append(cmdParts, "--workdir", workingDir)
+	}
+
+	if user := configSection.User; user != "" {
+		cmdParts = append(cmdParts, "--user", user)
 	}
 
 	// Add original image
-	if image, ok := configSection["Image"].(string); ok {
+	if image := configSection.Image; image != "" {
 		cmdParts = append(cmdParts, image)
 	}
 
 	// Add original command
-	if cmd, ok := configSection["Cmd"].([]interface{}); ok && len(cmd) > 0 {
+	if cmd := configSection.Cmd; len(cmd) > 0 {
 		for _, c := range cmd {
-			if cStr, ok := c.(string); ok {
-				cmdParts = append(cmdParts, cStr)
-			}
+			cmdParts = append(cmdParts, c)
 		}
 	}
-
+	pp.Println("ORIGINAL COMMAND: ", strings.Join(cmdParts, " "))
 	return strings.Join(cmdParts, " ")
 }
 
@@ -502,8 +481,8 @@ func (do *DockerOperations) saveContainerStateWithCommand(container *discovery.D
 		OriginalEnv:       container.Environment,
 		ComposeFile:       container.ComposeFile,
 		ComposeService:    container.ComposeService,
-		RecreationCommand: recreationCommand, // Now properly set!
-		OriginalConfig:    originalConfig,    // Full original config for debugging
+		RecreationCommand: recreationCommand,
+		OriginalConfig:    originalConfig, // Full original config for debugging
 	}
 	state.UpdatedAt = time.Now()
 
@@ -641,23 +620,14 @@ func (do *DockerOperations) buildInstrumentationEnv(container *discovery.DockerC
 }
 
 // getContainerConfig gets full container configuration
-func (do *DockerOperations) getContainerConfig(containerID string) (map[string]interface{}, error) {
-	cmd := exec.CommandContext(do.ctx, "docker", "inspect", containerID)
-	output, err := cmd.Output()
+func (do *DockerOperations) getContainerConfig(containerID string) (*container.InspectResponse, error) {
+	ctx := context.Background()
+	containerInfo, err := do.cli.ContainerInspect(ctx, containerID)
 	if err != nil {
-		return nil, err
+		log.Fatal(err)
 	}
 
-	var inspectData []map[string]interface{}
-	if err := json.Unmarshal(output, &inspectData); err != nil {
-		return nil, err
-	}
-
-	if len(inspectData) == 0 {
-		return nil, fmt.Errorf("no data returned")
-	}
-
-	return inspectData[0], nil
+	return &containerInfo, nil
 }
 
 // stopContainer stops a running container
