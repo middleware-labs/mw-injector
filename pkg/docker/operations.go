@@ -13,7 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/k0kubun/pp"
@@ -463,27 +465,276 @@ func (do *DockerOperations) saveContainerStateWithCommand(container *discovery.D
 	return do.saveState(state)
 }
 
-// UninstrumentContainer removes instrumentation from a container
 func (do *DockerOperations) UninstrumentContainer(containerName string) error {
-	// Load state to check if container was instrumented by us
-	state, err := do.loadState()
+	// Strategy 1: Try label-based uninstrumentation first (new approach)
+	listOptions := container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("name", containerName),
+			filters.Arg("label", LabelInstrumented+"=true"),
+		),
+	}
+
+	containers, err := do.cli.ContainerList(do.ctx, listOptions)
 	if err != nil {
-		return fmt.Errorf("failed to load state: %w", err)
+		return err
 	}
 
-	containerState, exists := state.Containers[containerName]
-	if !exists {
-		return fmt.Errorf("container %s was not instrumented by this tool", containerName)
+	if len(containers) > 0 {
+		// Found container with labels - use label-based restoration
+		fmt.Printf("🔧 Found container with instrumentation labels\n")
+		info, err := do.GetContainerInstrumentationInfo(containers[0].ID)
+		if err != nil {
+			return fmt.Errorf("failed to get instrumentation info: %w", err)
+		}
+		return do.restoreContainerFromLabels(containers[0].ID, info)
 	}
 
-	fmt.Printf("🔧 Uninstrumenting container: %s\n", containerName)
-
-	// Check if it's a compose container
-	if containerState.ComposeFile != "" {
-		return do.uninstrumentComposeContainer(&containerState)
+	// Strategy 2: Check state file (old approach)
+	state, err := do.loadState()
+	if err == nil {
+		if containerState, exists := state.Containers[containerName]; exists {
+			fmt.Printf("🔧 Found container in state file\n")
+			if containerState.ComposeFile != "" {
+				return do.uninstrumentComposeContainer(&containerState)
+			} else {
+				return do.uninstrumentStandaloneContainer(&containerState)
+			}
+		}
 	}
 
-	return do.uninstrumentStandaloneContainer(&containerState)
+	// Strategy 3: Try to detect compose information and restore from backup
+	listOptionsAny := container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("name", containerName)),
+	}
+
+	containers, err = do.cli.ContainerList(do.ctx, listOptionsAny)
+	if err != nil {
+		return err
+	}
+
+	if len(containers) == 0 {
+		return fmt.Errorf("container %s not found", containerName)
+	}
+
+	containerInfo := containers[0]
+	composeFile, composeService := do.detectComposeInfo(containerInfo)
+	if composeFile != "" {
+		fmt.Printf("🔧 Detected compose container, attempting backup restoration\n")
+		return do.restoreComposeFile(composeFile, composeService)
+	}
+
+	// Strategy 4: Manual removal of instrumentation environment variables
+	fmt.Printf("⚠️  Unable to automatically uninstrument container %s\n", containerName)
+	fmt.Printf("💡 Manual steps to uninstrument:\n")
+	fmt.Printf("   1. Remove JAVA_TOOL_OPTIONS containing javaagent\n")
+	fmt.Printf("   2. Remove MW_* environment variables\n")
+	fmt.Printf("   3. Remove OTEL_* environment variables\n")
+	fmt.Printf("   4. Remove agent volume mount: %s\n", DefaultContainerAgentPath)
+	fmt.Printf("   5. Restart the container\n")
+
+	return fmt.Errorf("unable to determine how to uninstrument container %s", containerName)
+}
+
+func (do *DockerOperations) uninstrumentComposeContainerByName(containerName string) error {
+	// Look for the container without label filter
+	listOptions := container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("name", containerName)),
+	}
+
+	containers, err := do.cli.ContainerList(do.ctx, listOptions)
+	if err != nil {
+		return err
+	}
+
+	if len(containers) == 0 {
+		return fmt.Errorf("container %s not found", containerName)
+	}
+
+	container := containers[0]
+
+	// Try to find the compose file and restore from backup
+	composeFile, composeService := do.detectComposeInfo(container)
+	if composeFile != "" {
+		return do.restoreComposeFile(composeFile, composeService)
+	}
+
+	return fmt.Errorf("unable to determine how to uninstrument container %s", containerName)
+}
+
+func (do *DockerOperations) detectComposeInfo(container types.Container) (string, string) {
+	// Check compose labels
+	if projectName := container.Labels["com.docker.compose.project"]; projectName != "" {
+		if service := container.Labels["com.docker.compose.service"]; service != "" {
+			if workingDir := container.Labels["com.docker.compose.project.working_dir"]; workingDir != "" {
+				// Look for docker-compose.yaml in the working directory
+				possibleFiles := []string{
+					filepath.Join(workingDir, "docker-compose.yaml"),
+					filepath.Join(workingDir, "docker-compose.yml"),
+				}
+
+				for _, file := range possibleFiles {
+					if _, err := os.Stat(file); err == nil {
+						return file, service
+					}
+				}
+			}
+		}
+	}
+
+	return "", ""
+}
+
+func (do *DockerOperations) restoreComposeFile(composeFile, serviceName string) error {
+	backupFile := composeFile + ".backup"
+
+	if _, err := os.Stat(backupFile); err == nil {
+		// Restore from backup
+		if err := do.copyFile(backupFile, composeFile); err != nil {
+			return fmt.Errorf("failed to restore compose file: %w", err)
+		}
+
+		fmt.Printf("   ✅ Restored %s from backup\n", filepath.Base(composeFile))
+
+		// Recreate the service
+		return do.recreateComposeServiceFromFile(composeFile, serviceName)
+	}
+
+	return fmt.Errorf("backup file not found: %s", backupFile)
+}
+
+func (do *DockerOperations) recreateComposeServiceFromFile(composeFile, serviceName string) error {
+	workingDir := filepath.Dir(composeFile)
+
+	// Change to compose file directory
+	originalDir, _ := os.Getwd()
+	defer os.Chdir(originalDir)
+
+	if err := os.Chdir(workingDir); err != nil {
+		return fmt.Errorf("failed to change to working directory: %w", err)
+	}
+
+	fmt.Printf("   Working directory: %s\n", workingDir)
+
+	// Stop and remove the existing container first
+	fmt.Println("   Stopping existing container...")
+	stopCmd := exec.CommandContext(do.ctx, "docker-compose", "stop", serviceName)
+	if output, err := stopCmd.CombinedOutput(); err != nil {
+		fmt.Printf("   Warning: Failed to stop container: %s\n", string(output))
+	}
+
+	fmt.Println("   Removing existing container...")
+	rmCmd := exec.CommandContext(do.ctx, "docker-compose", "rm", "-f", serviceName)
+	if output, err := rmCmd.CombinedOutput(); err != nil {
+		fmt.Printf("   Warning: Failed to remove container: %s\n", string(output))
+	}
+
+	// Recreate with restored compose file
+	fmt.Println("   Creating new container from restored compose file...")
+	cmd := exec.CommandContext(do.ctx, "docker-compose", "up", "-d", serviceName)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf("   Docker-compose error output: %s\n", string(output))
+		return fmt.Errorf("failed to recreate service: %w", err)
+	}
+
+	return nil
+}
+
+// Add this method to pkg/docker/operations.go
+func (do *DockerOperations) restoreContainerFromLabels(containerID string, info *InstrumentationInfo) error {
+	fmt.Printf("🔧 Restoring container to original state: %s\n", containerID[:12])
+
+	// Get current container info
+	containerInfo, err := do.cli.ContainerInspect(do.ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("failed to inspect container: %w", err)
+	}
+
+	// Parse original configuration from labels
+	var originalConfig container.Config
+	if info.OriginalConfig != "" {
+		if err := json.Unmarshal([]byte(info.OriginalConfig), &originalConfig); err != nil {
+			return fmt.Errorf("failed to parse original config: %w", err)
+		}
+	} else {
+		// Fallback: use current config but restore original environment
+		originalConfig = *containerInfo.Config
+	}
+
+	// Restore original environment variables
+	originalEnvSlice := make([]string, 0, len(info.OriginalEnv))
+	for k, v := range info.OriginalEnv {
+		originalEnvSlice = append(originalEnvSlice, fmt.Sprintf("%s=%s", k, v))
+	}
+	originalConfig.Env = originalEnvSlice
+
+	// Remove instrumentation labels
+	if originalConfig.Labels == nil {
+		originalConfig.Labels = make(map[string]string)
+	}
+	cleanLabels := make(map[string]string)
+	for k, v := range originalConfig.Labels {
+		// Skip middleware instrumentation labels
+		if !strings.HasPrefix(k, "middleware.") {
+			cleanLabels[k] = v
+		}
+	}
+	originalConfig.Labels = cleanLabels
+
+	// Create host config without agent volume mount
+	originalHostConfig := *containerInfo.HostConfig
+
+	// Remove agent volume mount
+	var cleanBinds []string
+	for _, bind := range originalHostConfig.Binds {
+		// Skip the agent mount
+		if !strings.Contains(bind, DefaultContainerAgentPath) {
+			cleanBinds = append(cleanBinds, bind)
+		}
+	}
+	originalHostConfig.Binds = cleanBinds
+
+	// Get container name
+	containerName := containerInfo.Name
+	if strings.HasPrefix(containerName, "/") {
+		containerName = containerName[1:]
+	}
+
+	// Stop and remove current container
+	if err := do.stopContainer(containerID); err != nil {
+		return fmt.Errorf("failed to stop container: %w", err)
+	}
+
+	if err := do.removeContainer(containerID); err != nil {
+		return fmt.Errorf("failed to remove container: %w", err)
+	}
+
+	// Create restored container
+	resp, err := do.cli.ContainerCreate(
+		do.ctx,
+		&originalConfig,
+		&originalHostConfig,
+		&network.NetworkingConfig{
+			EndpointsConfig: containerInfo.NetworkSettings.Networks,
+		},
+		nil, // platform
+		containerName,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create restored container: %w", err)
+	}
+
+	// Start the restored container
+	if err := do.cli.ContainerStart(do.ctx, resp.ID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("failed to start restored container: %w", err)
+	}
+
+	fmt.Printf("   ✅ Container %s restored to original configuration\n", containerName)
+	return nil
 }
 
 // uninstrumentStandaloneContainer removes instrumentation from standalone container
@@ -717,18 +968,48 @@ func (do *DockerOperations) updateContainerEnvironment(
 	return do.recreateContainerWithAPI(containerInfo, newEnv)
 }
 
-func (do *DockerOperations) recreateContainerWithAPI(
-	containerInfo container.InspectResponse,
-	newEnv []string,
-) error {
+func (do *DockerOperations) recreateContainerWithAPI(containerInfo container.InspectResponse, newEnv []string) error {
+	// Extract original environment from current env (before instrumentation was added)
+	originalEnv := do.extractOriginalEnvFromCurrent(containerInfo.Config.Env)
+
+	// Derive service name from container metadata
+	serviceName := do.deriveServiceName(containerInfo)
+	// Serialize original config for potential restoration
+	originalConfigBytes, err := json.Marshal(containerInfo.Config)
+	if err != nil {
+		return fmt.Errorf("failed to serialize original config: %w", err)
+	}
+
+	// Create instrumentation labels
+	instrumentationLabels := map[string]string{
+		LabelInstrumented:   "true",
+		LabelInstrumentedAt: time.Now().Format(time.RFC3339),
+		LabelAgentPath:      do.hostAgentPath,
+		LabelServiceName:    serviceName,
+		LabelOriginalEnv:    do.serializeEnv(originalEnv),
+		LabelOriginalConfig: string(originalConfigBytes),
+	}
+
+	// Merge with existing labels (preserve user labels, add instrumentation labels)
+	newLabels := make(map[string]string)
+	if containerInfo.Config.Labels != nil {
+		for k, v := range containerInfo.Config.Labels {
+			newLabels[k] = v
+		}
+	}
+	for k, v := range instrumentationLabels {
+		newLabels[k] = v
+	}
+
+	// Create new container config based on existing one
 	config := &container.Config{
 		Image:        containerInfo.Config.Image,
-		Env:          newEnv,
+		Env:          newEnv, // Updated environment with instrumentation
 		Cmd:          containerInfo.Config.Cmd,
 		Entrypoint:   containerInfo.Config.Entrypoint,
 		WorkingDir:   containerInfo.Config.WorkingDir,
 		User:         containerInfo.Config.User,
-		Labels:       containerInfo.Config.Labels,
+		Labels:       newLabels, // Include instrumentation metadata
 		ExposedPorts: containerInfo.Config.ExposedPorts,
 	}
 
@@ -743,7 +1024,7 @@ func (do *DockerOperations) recreateContainerWithAPI(
 		Resources:     containerInfo.HostConfig.Resources,
 	}
 
-	// 🔧 ADD AGENT VOLUME MOUNT HERE:
+	// Add agent volume mount
 	agentMount := fmt.Sprintf("%s:%s:ro", do.hostAgentPath, DefaultContainerAgentPath)
 	hostConfig.Binds = append(hostConfig.Binds, agentMount)
 
@@ -754,7 +1035,7 @@ func (do *DockerOperations) recreateContainerWithAPI(
 
 	containerName := containerInfo.Name
 	if strings.HasPrefix(containerName, "/") {
-		containerName = containerName[1:]
+		containerName = containerName[1:] // Remove leading slash
 	}
 
 	// Stop and remove old container
@@ -772,7 +1053,7 @@ func (do *DockerOperations) recreateContainerWithAPI(
 		config,
 		hostConfig,
 		networkConfig,
-		nil,
+		nil, // platform
 		containerName,
 	)
 	if err != nil {
@@ -786,6 +1067,69 @@ func (do *DockerOperations) recreateContainerWithAPI(
 
 	fmt.Printf("   ✅ Container recreated with ID: %s\n", resp.ID[:12])
 	return nil
+}
+
+// Helper method to create instrumentation labels
+func (do *DockerOperations) createInstrumentationLabels(containerInfo container.InspectResponse, originalContainer *discovery.DockerContainer) map[string]string {
+	// Extract original environment (filter out instrumentation vars)
+	originalEnv := do.extractOriginalEnvFromCurrent(containerInfo.Config.Env)
+
+	// Serialize original config for restoration
+	originalConfigBytes, _ := json.Marshal(containerInfo.Config)
+
+	// Determine service name
+	serviceName := do.deriveServiceName(containerInfo)
+
+	labels := map[string]string{
+		LabelInstrumented:   "true",
+		LabelInstrumentedAt: time.Now().Format(time.RFC3339),
+		LabelAgentPath:      do.hostAgentPath,
+		LabelOriginalConfig: string(originalConfigBytes),
+		LabelServiceName:    serviceName,
+		LabelOriginalEnv:    do.serializeEnv(originalEnv),
+	}
+
+	// Add compose-specific labels if available
+	if originalContainer != nil && originalContainer.ComposeFile != "" {
+		labels[LabelComposeFile] = originalContainer.ComposeFile
+		labels[LabelComposeService] = originalContainer.ComposeService
+	}
+
+	return labels
+}
+
+func (do *DockerOperations) deriveServiceName(containerInfo container.InspectResponse) string {
+	// Try to get from existing labels first
+	if serviceName := containerInfo.Config.Labels["com.docker.compose.service"]; serviceName != "" {
+		return serviceName
+	}
+
+	// Fall back to container name
+	name := strings.TrimPrefix(containerInfo.Name, "/")
+	return name
+}
+
+func (do *DockerOperations) extractOriginalEnvFromCurrent(currentEnv []string) map[string]string {
+	originalEnv := make(map[string]string)
+	for _, env := range currentEnv {
+		// Skip instrumentation-specific variables
+		if strings.HasPrefix(env, "MW_") ||
+			strings.HasPrefix(env, "OTEL_") ||
+			(strings.HasPrefix(env, "JAVA_TOOL_OPTIONS=") && strings.Contains(env, "javaagent")) {
+			continue
+		}
+
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) == 2 {
+			originalEnv[parts[0]] = parts[1]
+		}
+	}
+	return originalEnv
+}
+
+func (do *DockerOperations) serializeEnv(env map[string]string) string {
+	data, _ := json.Marshal(env)
+	return string(data)
 }
 
 // removeContainerByName removes a container by name
