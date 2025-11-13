@@ -1,6 +1,8 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/config"
@@ -31,8 +34,8 @@ const (
 type DockerOperations struct {
 	ctx           context.Context
 	discoverer    *discovery.DockerDiscoverer
-	hostAgentPath string
-	cli           client.Client
+	hostAgentPath string // TODO: Make this name better. Its not exactly a hostAgent
+	cli           *client.Client
 }
 
 // NewDockerOperations creates a new Docker operations handler
@@ -45,7 +48,7 @@ func NewDockerOperations(ctx context.Context, hostAgentPath string) (*DockerOper
 		ctx:           ctx,
 		discoverer:    discovery.NewDockerDiscoverer(ctx),
 		hostAgentPath: hostAgentPath,
-		cli:           *cli,
+		cli:           cli,
 	}, nil
 }
 
@@ -145,57 +148,28 @@ func (do *DockerOperations) InstrumentContainer(containerName string, cfg *confi
 func (do *DockerOperations) instrumentStandaloneContainer(container *discovery.DockerContainer, cfg *config.ProcessConfiguration) error {
 	fmt.Printf("🔧 Instrumenting standalone container: %s\n", container.ContainerName)
 
-	// Step 1: Get and save original container configuration BEFORE making any changes
+	// Step 1: Get original container configuration
 	containerConfig, err := do.getContainerConfig(container.ContainerID)
 	if err != nil {
 		return fmt.Errorf("failed to get container config: %w", err)
 	}
 
-	// Save original configuration as JSON string for restoration
-	originalConfigBytes, err := json.Marshal(containerConfig)
-	if err != nil {
-		return fmt.Errorf("failed to serialize original config: %w", err)
-	}
-
-	// Build original recreation command from current state (before instrumentation)
-	originalRecreationCommand := do.buildOriginalDockerRunCommand(containerConfig, container.ContainerName)
-
-	// Step 2: Copy agent to container
-	if err := do.copyAgentToContainer(container.ContainerID); err != nil {
-		return fmt.Errorf("failed to copy agent: %w", err)
-	}
-	fmt.Println("   ✅ Agent copied to container")
-
-	// Step 3: Build new environment variables with instrumentation
+	// Step 2: Build new environment variables with instrumentation
 	newEnv := do.buildInstrumentationEnv(container, cfg)
 
-	// Step 4: Stop the container
-	fmt.Println("   🛑 Stopping container...")
-	if err := do.stopContainer(container.ContainerID); err != nil {
-		return fmt.Errorf("failed to stop container: %w", err)
+	// Convert map to slice format
+	envSlice := make([]string, 0, len(newEnv))
+	for k, v := range newEnv {
+		envSlice = append(envSlice, fmt.Sprintf("%s=%s", k, v))
 	}
 
-	// Step 5: Commit container to preserve any changes
-	newImageName := fmt.Sprintf("%s-mw-instrumented:latest", container.ContainerName)
-	if err := do.commitContainer(container.ContainerID, newImageName); err != nil {
-		fmt.Printf("   ⚠️  Warning: Could not commit container: %v\n", err)
-		// Use original image name if commit fails
-		newImageName = container.ImageName + ":" + container.ImageTag
-	}
-
-	// Step 6: Remove old container
-	if err := do.removeContainer(container.ContainerID); err != nil {
-		return fmt.Errorf("failed to remove old container: %w", err)
-	}
-
-	// Step 7: Recreate container with instrumentation using the committed image
-	instrumentedRunCommand := do.buildInstrumentedDockerRunCommand(*containerConfig, newEnv, container.ContainerName, newImageName)
-	if err := do.runContainer(instrumentedRunCommand); err != nil {
+	// Step 3: Recreate container with volume mount + new environment
+	if err := do.recreateContainerWithAPI(*containerConfig, envSlice); err != nil {
 		return fmt.Errorf("failed to recreate container: %w", err)
 	}
 
-	// Step 8: Save state with ORIGINAL recreation command for proper restoration
-	if err := do.saveContainerStateWithCommand(container, cfg, originalRecreationCommand, string(originalConfigBytes)); err != nil {
+	// Step 4: Save state
+	if err := do.saveContainerState(container, cfg); err != nil {
 		fmt.Printf("   ⚠️  Warning: Could not save state: %v\n", err)
 	}
 
@@ -574,20 +548,58 @@ func (do *DockerOperations) uninstrumentComposeContainer(state *ContainerState) 
 
 // copyAgentToContainer copies the agent JAR to a running container
 func (do *DockerOperations) copyAgentToContainer(containerID string) error {
-	// Create directory in container
-	mkdirCmd := exec.CommandContext(do.ctx, "docker", "exec", containerID, "mkdir", "-p", "/opt/middleware/agents")
-	if err := mkdirCmd.Run(); err != nil {
-		// Try without mkdir if it fails (some distroless images don't have mkdir)
-		fmt.Println("   ⚠️  Could not create directory, trying direct copy...")
+	agentFileContent, err := os.ReadFile(do.hostAgentPath)
+	if err != nil {
+		return fmt.Errorf("failed to read agent file: %w", err)
+	}
+	tarBuffer, err := do.createAgentTar(agentFileContent)
+	if err != nil {
+		return fmt.Errorf("failed to create Agent tar: %w", err)
 	}
 
-	// Copy agent file
-	containerPath := containerID + ":" + DefaultContainerAgentPath
-	cmd := exec.CommandContext(do.ctx, "docker", "cp", do.hostAgentPath, containerPath)
-	return cmd.Run()
+	err = do.cli.CopyToContainer(
+		do.ctx,
+		containerID,
+		"/opt/middleware/agents/",
+		tarBuffer,
+		container.CopyToContainerOptions{
+			AllowOverwriteDirWithFile: false,
+		},
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to copy agent to container: %w", err)
+	}
+
+	fmt.Println("   ✅ Agent copied to container via Docker API")
+	return nil
 }
 
-// buildInstrumentationEnv builds environment variables for instrumentation
+func (do *DockerOperations) createAgentTar(agentContent []byte) (*bytes.Buffer, error) {
+	tarBuffer := &bytes.Buffer{}
+	tarWriter := tar.NewWriter(tarBuffer)
+	defer tarWriter.Close()
+
+	// Create tar header for the agent file
+	header := &tar.Header{
+		Name:     "middleware-javaagent.jar",
+		Size:     int64(len(agentContent)),
+		Mode:     0644,
+		ModTime:  time.Now(),
+		Typeflag: tar.TypeReg,
+	}
+
+	if err := tarWriter.WriteHeader(header); err != nil {
+		return nil, err
+	}
+
+	if _, err := tarWriter.Write(agentContent); err != nil {
+		return nil, err
+	}
+
+	return tarBuffer, nil
+}
+
 func (do *DockerOperations) buildInstrumentationEnv(container *discovery.DockerContainer, cfg *config.ProcessConfiguration) map[string]string {
 	env := make(map[string]string)
 
@@ -632,20 +644,148 @@ func (do *DockerOperations) getContainerConfig(containerID string) (*container.I
 
 // stopContainer stops a running container
 func (do *DockerOperations) stopContainer(containerID string) error {
-	cmd := exec.CommandContext(do.ctx, "docker", "stop", containerID)
-	return cmd.Run()
+	// Docker uses a graceful shutdown process when stopping containers:
+	// 1. First, Docker sends SIGTERM to the main process (PID 1) in the container
+	// 2. The application has 'timeout' seconds to handle SIGTERM and shut down gracefully
+	//    - This allows the app to: close database connections, save state, cleanup resources, etc.
+	// 3. If the container is still running after the timeout expires, Docker sends SIGKILL
+	//    - SIGKILL cannot be caught or ignored - it immediately terminates the process
+	//    - This prevents containers from hanging indefinitely during shutdown
+	//
+	// 30 seconds is a reasonable timeout for most Java applications to:
+	// - Complete current requests
+	// - Close connection pools
+	// - Flush logs and caches
+	// - Perform other cleanup operations
+
+	timeout := 30
+
+	err := do.cli.ContainerStop(
+		do.ctx,
+		containerID,
+		container.StopOptions{
+			Timeout: &timeout,
+		},
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to stop container %s: %w", containerID, err)
+	}
+
+	return nil
 }
 
 // stopContainerByName stops a container by name
 func (do *DockerOperations) stopContainerByName(name string) error {
-	cmd := exec.CommandContext(do.ctx, "docker", "stop", name)
-	return cmd.Run()
+	err := do.stopContainer(name)
+	if err != nil {
+		return fmt.Errorf("failed to stop container %s: %w", name, err)
+	}
+
+	return nil
 }
 
 // removeContainer removes a container
 func (do *DockerOperations) removeContainer(containerID string) error {
-	cmd := exec.CommandContext(do.ctx, "docker", "rm", containerID)
-	return cmd.Run()
+	err := do.cli.ContainerRemove(
+		do.ctx,
+		containerID,
+		container.RemoveOptions{
+			Force: true,
+		},
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to remove container %s: %w", containerID, err)
+	}
+
+	return nil
+}
+
+func (do *DockerOperations) updateContainerEnvironment(
+	containerID string,
+	newEnv []string,
+) error {
+	containerInfo, err := do.cli.ContainerInspect(do.ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("failed to inspect container %s: %w", containerID, err)
+	}
+
+	// For now, we'll still need to recreate the container because Docker doesn't
+	// allow updating environment variables of existing containers
+	// But we'll do it through the API instead of shell commands
+	return do.recreateContainerWithAPI(containerInfo, newEnv)
+}
+
+func (do *DockerOperations) recreateContainerWithAPI(
+	containerInfo container.InspectResponse,
+	newEnv []string,
+) error {
+	config := &container.Config{
+		Image:        containerInfo.Config.Image,
+		Env:          newEnv,
+		Cmd:          containerInfo.Config.Cmd,
+		Entrypoint:   containerInfo.Config.Entrypoint,
+		WorkingDir:   containerInfo.Config.WorkingDir,
+		User:         containerInfo.Config.User,
+		Labels:       containerInfo.Config.Labels,
+		ExposedPorts: containerInfo.Config.ExposedPorts,
+	}
+
+	// Create host config based on existing one
+	hostConfig := &container.HostConfig{
+		Binds:         containerInfo.HostConfig.Binds,
+		PortBindings:  containerInfo.HostConfig.PortBindings,
+		RestartPolicy: containerInfo.HostConfig.RestartPolicy,
+		NetworkMode:   containerInfo.HostConfig.NetworkMode,
+		VolumeDriver:  containerInfo.HostConfig.VolumeDriver,
+		VolumesFrom:   containerInfo.HostConfig.VolumesFrom,
+		Resources:     containerInfo.HostConfig.Resources,
+	}
+
+	// 🔧 ADD AGENT VOLUME MOUNT HERE:
+	agentMount := fmt.Sprintf("%s:%s:ro", do.hostAgentPath, DefaultContainerAgentPath)
+	hostConfig.Binds = append(hostConfig.Binds, agentMount)
+
+	// Network config
+	networkConfig := &network.NetworkingConfig{
+		EndpointsConfig: containerInfo.NetworkSettings.Networks,
+	}
+
+	containerName := containerInfo.Name
+	if strings.HasPrefix(containerName, "/") {
+		containerName = containerName[1:]
+	}
+
+	// Stop and remove old container
+	if err := do.stopContainer(containerInfo.ID); err != nil {
+		return fmt.Errorf("failed to stop old container: %w", err)
+	}
+
+	if err := do.removeContainer(containerInfo.ID); err != nil {
+		return fmt.Errorf("failed to remove old container: %w", err)
+	}
+
+	// Create new container
+	resp, err := do.cli.ContainerCreate(
+		do.ctx,
+		config,
+		hostConfig,
+		networkConfig,
+		nil,
+		containerName,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create new container: %w", err)
+	}
+
+	// Start the new container
+	if err := do.cli.ContainerStart(do.ctx, resp.ID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("failed to start new container: %w", err)
+	}
+
+	fmt.Printf("   ✅ Container recreated with ID: %s\n", resp.ID[:12])
+	return nil
 }
 
 // removeContainerByName removes a container by name
@@ -1050,21 +1190,36 @@ func (do *DockerOperations) ListInstrumentedContainers() ([]ContainerState, erro
 
 // verifyContainerInstrumentation checks if instrumentation actually worked
 func (do *DockerOperations) verifyContainerInstrumentation(containerName string) error {
-	// Check if agent file exists in container
-	cmd := exec.CommandContext(do.ctx, "docker", "exec", containerName, "test", "-f", DefaultContainerAgentPath)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("agent file not found in container")
-	}
-
-	// Check if JAVA_TOOL_OPTIONS is set
-	cmd = exec.CommandContext(do.ctx, "docker", "exec", containerName, "sh", "-c", "echo $JAVA_TOOL_OPTIONS")
-	output, err := cmd.Output()
+	// Get container info
+	containerInfo, err := do.cli.ContainerInspect(do.ctx, containerName)
 	if err != nil {
-		return fmt.Errorf("failed to check JAVA_TOOL_OPTIONS: %w", err)
+		return fmt.Errorf("failed to inspect container: %w", err)
 	}
 
-	if !strings.Contains(string(output), "javaagent") {
+	// Check if JAVA_TOOL_OPTIONS is set correctly in environment
+	javaOptsFound := false
+	for _, env := range containerInfo.Config.Env {
+		if strings.HasPrefix(env, "JAVA_TOOL_OPTIONS=") && strings.Contains(env, "javaagent") {
+			javaOptsFound = true
+			break
+		}
+	}
+
+	if !javaOptsFound {
 		return fmt.Errorf("JAVA_TOOL_OPTIONS not set correctly")
+	}
+
+	// Verify agent mount exists
+	agentMountFound := false
+	for _, mount := range containerInfo.HostConfig.Binds {
+		if strings.Contains(mount, DefaultContainerAgentPath) {
+			agentMountFound = true
+			break
+		}
+	}
+
+	if !agentMountFound {
+		return fmt.Errorf("agent mount not found")
 	}
 
 	return nil
