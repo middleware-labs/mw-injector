@@ -326,7 +326,10 @@ func (c *InstrumentDockerCommand) Execute() error {
 	updated := 0
 	skipped := 0
 
-	dockerOps := docker.NewDockerOperations(ctx, installedPath)
+	dockerOps, err := docker.NewDockerOperations(ctx, installedPath)
+	if err != nil {
+		return fmt.Errorf("X error in createing docker operations, %v", err.Error())
+	}
 
 	for _, container := range containers {
 		// Skip if already instrumented
@@ -460,7 +463,10 @@ func (c *InstrumentContainerCommand) Execute() error {
 	cfg.JavaAgentPath = docker.DefaultContainerAgentPath
 
 	// Instrument
-	dockerOps := docker.NewDockerOperations(ctx, installedPath)
+	dockerOps, err := docker.NewDockerOperations(ctx, installedPath)
+	if err != nil {
+		return fmt.Errorf("X error in createing docker operations, %v", err.Error())
+	}
 	if err := dockerOps.InstrumentContainer(c.containerName, &cfg); err != nil {
 		return fmt.Errorf("❌ Failed to instrument container: %v", err)
 	}
@@ -792,12 +798,6 @@ type ConfigInstrumentDockerCommand struct {
 	configPath string
 }
 
-//	func NewConfigInstrumentDockerCommand(config *types.CommandConfig, configPath string) *ConfigInstrumentDockerCommand {
-//		return &ConfigInstrumentDockerCommand{
-//			config:     config,
-//			configPath: configPath,
-//		}
-//	}
 func NewConfigInstrumentDockerCommand(config *types.CommandConfig, configPath string) *ConfigInstrumentDockerCommand {
 	// If no config path provided, try to find default
 	if configPath == "" {
@@ -875,7 +875,10 @@ func (c *ConfigInstrumentDockerCommand) Execute() error {
 	updated := 0
 	skipped := 0
 
-	dockerOps := docker.NewDockerOperations(ctx, installedPath)
+	dockerOps, err := docker.NewDockerOperations(ctx, installedPath)
+	if err != nil {
+		return fmt.Errorf("X error in createing docker operations, %v", err.Error())
+	}
 
 	for _, container := range containers {
 		// Auto-update if already instrumented (no prompts)
