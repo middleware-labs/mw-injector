@@ -139,7 +139,8 @@ func (c *ListAllCommand) Execute() error {
 
 	// Get Docker containers
 	dockerDiscoverer := discovery.NewDockerDiscoverer(ctx)
-	containers, dockerErr := dockerDiscoverer.DiscoverJavaContainers()
+	javaContainers, javaDockerErr := dockerDiscoverer.DiscoverJavaContainers()
+	nodeContainers, nodeDiscoverErr := dockerDiscoverer.DiscoverNodeContainers()
 
 	// Segregate processes by type
 	var standaloneProcs []discovery.JavaProcess
@@ -166,17 +167,27 @@ func (c *ListAllCommand) Execute() error {
 	c.printSystemdSection(systemdProcs)
 
 	// Print Docker section
-	if dockerErr == nil {
-		c.printDockerSection(containers)
+	if javaDockerErr == nil {
+		c.printDockerSection(javaContainers)
 	} else {
 		fmt.Printf("\n╔══════════════════════════════════════════════════════════════════════╗\n")
 		fmt.Printf("║                       [DOCKER] CONTAINERS                            ║\n")
 		fmt.Printf("╚══════════════════════════════════════════════════════════════════════╝\n\n")
-		fmt.Printf("[!] Unable to list Docker containers: %v\n\n", dockerErr)
+		fmt.Printf("[!] Unable to list Docker containers: %v\n\n", javaDockerErr)
+	}
+
+	// TODO: remove this gross code duplication
+	if nodeDiscoverErr == nil {
+		c.printDockerSection(nodeContainers)
+	} else {
+		fmt.Printf("\n╔══════════════════════════════════════════════════════════════════════╗\n")
+		fmt.Printf("║                       [DOCKER] CONTAINERS                            ║\n")
+		fmt.Printf("╚══════════════════════════════════════════════════════════════════════╝\n\n")
+		fmt.Printf("[!] Unable to list Docker containers: %v\n\n", nodeDiscoverErr)
 	}
 
 	// Print summary
-	c.printSummary(len(tomcatProcs), len(systemdProcs), len(containers))
+	c.printSummary(len(tomcatProcs), len(systemdProcs), len(javaContainers))
 
 	return nil
 }

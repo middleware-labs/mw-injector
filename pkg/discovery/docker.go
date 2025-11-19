@@ -33,6 +33,7 @@ type DockerContainer struct {
 	JavaProcesses []string `json:"java.processes,omitempty"`
 	JarFiles      []string `json:"java.jar_files,omitempty"`
 
+	IsNodeJS bool `json:"node.detected"`
 	// Instrumentation detection
 	HasJavaAgent      bool   `json:"java.agent.present"`
 	JavaAgentPath     string `json:"java.agent.path,omitempty"`
@@ -79,6 +80,36 @@ type DockerDiscoverer struct {
 // NewDockerDiscoverer creates a new Docker discoverer
 func NewDockerDiscoverer(ctx context.Context) *DockerDiscoverer {
 	return &DockerDiscoverer{ctx: ctx}
+}
+
+func (dd *DockerDiscoverer) DiscoverNodeContainers() ([]DockerContainer, error) {
+	//TODO: fix this ugly duplication. Some sort of DiscoverXContainers(x) where x being langs or
+	// frameworks
+	if !dd.isDockerAvailable() {
+		return nil, fmt.Errorf("docker is not available or not running")
+	}
+
+	// Get all running containers
+	containers, err := dd.listRunningContainers()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	// Filter and inspect Java containers
+	var nodeContainers []DockerContainer
+	for _, containerID := range containers {
+		container, err := dd.inspectContainer(containerID)
+		if err != nil {
+			continue // Skip containers we can't inspect
+		}
+		// TODO: check above todo.
+		// Check if container runs node
+		if dd.isNodeJSContainer(container) {
+			nodeContainers = append(nodeContainers, *container)
+		}
+	}
+
+	return nodeContainers, nil
 }
 
 // DiscoverJavaContainers finds all running Docker containers with Java
@@ -418,6 +449,13 @@ func (dd *DockerDiscoverer) isMiddlewareAgent(agentPath string) bool {
 	return false
 }
 
+/* TODO: -------------------------------------------
+ Check and Fix Potential Issues:
+* 		- False Positives: Could detect non-Java containers that just have Java keywords in names
+*		- Side Effects: The function both returns a boolean AND modifies the container object
+*		- Error Handling: The dynamic check (hasJavaProcessInside) might fail silently
+*/
+
 // isJavaContainer checks if container runs Java
 func (dd *DockerDiscoverer) isJavaContainer(container *DockerContainer) bool {
 	// Check 1: Image name contains java
@@ -489,6 +527,74 @@ func (dd *DockerDiscoverer) detectJavaProcesses(container *DockerContainer) {
 			container.JarFiles = append(container.JarFiles, jarFiles...)
 		}
 	}
+}
+
+func (dd *DockerDiscoverer) isNodeJSContainer(container *DockerContainer) bool {
+	// TODO:
+	// Wierdly enough, `kind` locally uses some node containers and it is also showing up.
+	// Check that behavior.
+
+	// Check 1: Image name contains node
+	if strings.Contains(strings.ToLower(container.ImageName), "node") ||
+		strings.Contains(strings.ToLower(container.ImageName), "nodejs") {
+		container.IsNodeJS = true
+		return true
+	}
+
+	// Check 2: Command contains node or npm
+	commandLower := strings.ToLower(container.Command)
+	if strings.Contains(commandLower, "node") ||
+		strings.Contains(commandLower, "npm") ||
+		strings.Contains(commandLower, "npx") ||
+		strings.Contains(commandLower, "yarn") {
+		container.IsNodeJS = true
+		return true
+	}
+
+	// Check 3: Entrypoint contains node
+	for _, entry := range container.Entrypoint {
+		entryLower := strings.ToLower(entry)
+		if strings.Contains(entryLower, "node") ||
+			strings.Contains(entryLower, "npm") ||
+			strings.Contains(entryLower, "npx") ||
+			strings.Contains(entryLower, "yarn") {
+			container.IsNodeJS = true
+			return true
+		}
+	}
+
+	// Check 4: Environment variables indicate Node.js
+	if _, ok := container.Environment["NODE_ENV"]; ok {
+		container.IsNodeJS = true
+		return true
+	}
+	if _, ok := container.Environment["NPM_CONFIG_REGISTRY"]; ok {
+		container.IsNodeJS = true
+		return true
+	}
+	if _, ok := container.Environment["YARN_VERSION"]; ok {
+		container.IsNodeJS = true
+		return true
+	}
+	if _, ok := container.Environment["NODE_VERSION"]; ok {
+		container.IsNodeJS = true
+		return true
+	}
+
+	// Check 5: Try to detect Node.js process inside container (requires exec)
+	if dd.hasNodeJSProcessInside(container.ContainerID) {
+		container.IsNodeJS = true
+		return true
+	}
+
+	return false
+}
+
+// hasNodeJSProcessInside checks if container has Node.js processes running
+func (dd *DockerDiscoverer) hasNodeJSProcessInside(containerID string) bool {
+	cmd := exec.CommandContext(dd.ctx, "docker", "exec", containerID, "sh", "-c", "ps aux | grep -E '(node|npm)' | grep -v grep")
+	output, err := cmd.Output()
+	return err == nil && len(output) > 0
 }
 
 // extractJarFilesFromCommand extracts JAR file paths from command line
