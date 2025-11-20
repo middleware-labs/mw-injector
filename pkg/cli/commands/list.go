@@ -66,20 +66,32 @@ func (c *ListDockerCommand) Execute() error {
 	ctx := context.Background()
 	discoverer := discovery.NewDockerDiscoverer(ctx)
 
-	containers, err := discoverer.DiscoverJavaContainers()
+	javaContainers, err := discoverer.DiscoverJavaContainers()
 	if err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
 
-	if len(containers) == 0 {
-		fmt.Println("No Java Docker containers found")
-		return nil
+	if len(javaContainers) == 0 {
+		fmt.Println("No Java Docker containers found.\n\n")
+	} else {
+		fmt.Printf("Found %d Java Docker containers:\n\n", len(javaContainers))
+		for _, container := range javaContainers {
+			c.printContainer(&container)
+		}
 	}
 
-	fmt.Printf("Found %d Java Docker containers:\n\n", len(containers))
+	nodeContainers, err := discoverer.DiscoverNodeContainers()
+	if err != nil {
+		return fmt.Errorf("error: %v in discovering node containers", err)
+	}
 
-	for _, container := range containers {
-		c.printContainer(&container)
+	if len(nodeContainers) == 0 {
+		fmt.Println("No nodejs containers found")
+	} else {
+		fmt.Printf("Found %d NodeJS Docker containers:\n\n", len(nodeContainers))
+		for _, container := range nodeContainers {
+			c.printContainer(&container)
+		}
 	}
 
 	return nil
@@ -139,7 +151,8 @@ func (c *ListAllCommand) Execute() error {
 
 	// Get Docker containers
 	dockerDiscoverer := discovery.NewDockerDiscoverer(ctx)
-	containers, dockerErr := dockerDiscoverer.DiscoverJavaContainers()
+	javaContainers, javaDockerErr := dockerDiscoverer.DiscoverJavaContainers()
+	nodeContainers, nodeDiscoverErr := dockerDiscoverer.DiscoverNodeContainers()
 
 	// Segregate processes by type
 	var standaloneProcs []discovery.JavaProcess
@@ -165,18 +178,22 @@ func (c *ListAllCommand) Execute() error {
 	// Print Systemd section
 	c.printSystemdSection(systemdProcs)
 
-	// Print Docker section
-	if dockerErr == nil {
-		c.printDockerSection(containers)
+	// Print Java Docker section
+	if javaDockerErr == nil {
+		c.printJavaDockerSection(javaContainers)
 	} else {
-		fmt.Printf("\n╔══════════════════════════════════════════════════════════════════════╗\n")
-		fmt.Printf("║                       [DOCKER] CONTAINERS                            ║\n")
-		fmt.Printf("╚══════════════════════════════════════════════════════════════════════╝\n\n")
-		fmt.Printf("[!] Unable to list Docker containers: %v\n\n", dockerErr)
+		c.printDockerErrorSection("JAVA", javaDockerErr)
+	}
+
+	// Print Node.js Docker section
+	if nodeDiscoverErr == nil {
+		c.printNodeDockerSection(nodeContainers)
+	} else {
+		c.printDockerErrorSection("NODE.JS", nodeDiscoverErr)
 	}
 
 	// Print summary
-	c.printSummary(len(tomcatProcs), len(systemdProcs), len(containers))
+	c.printSummary(len(tomcatProcs), len(systemdProcs), len(javaContainers), len(nodeContainers))
 
 	return nil
 }
@@ -188,7 +205,7 @@ func (c *ListAllCommand) GetDescription() string {
 func (c *ListAllCommand) printHeader() {
 	fmt.Println()
 	fmt.Println("╔══════════════════════════════════════════════════════════════════════╗")
-	fmt.Println("║                    [JAVA] PROCESS INVENTORY                          ║")
+	fmt.Println("║                    [RUNTIME] PROCESS INVENTORY                      ║")
 	fmt.Println("╚══════════════════════════════════════════════════════════════════════╝")
 	fmt.Println()
 }
@@ -242,22 +259,47 @@ func (c *ListAllCommand) printSystemdSection(processes []discovery.JavaProcess) 
 	}
 }
 
-func (c *ListAllCommand) printDockerSection(containers []discovery.DockerContainer) {
+func (c *ListAllCommand) printJavaDockerSection(containers []discovery.DockerContainer) {
 	fmt.Printf("╔══════════════════════════════════════════════════════════════════════╗\n")
-	fmt.Printf("║                       [DOCKER] CONTAINERS                            ║\n")
+	fmt.Printf("║                    [DOCKER] JAVA CONTAINERS                          ║\n")
 	fmt.Printf("╚══════════════════════════════════════════════════════════════════════╝\n\n")
 
 	if len(containers) == 0 {
-		fmt.Println("  No Docker containers found")
+		fmt.Println("  No Java Docker containers found")
 		fmt.Println()
 		return
 	}
 
-	fmt.Printf("  Found %d container(s)\n\n", len(containers))
+	fmt.Printf("  Found %d Java container(s)\n\n", len(containers))
 
 	for i, container := range containers {
-		c.printDockerContainer(&container, i+1, len(containers))
+		c.printDockerContainer(&container, i+1, len(containers), "JAVA")
 	}
+}
+
+func (c *ListAllCommand) printNodeDockerSection(containers []discovery.DockerContainer) {
+	fmt.Printf("╔══════════════════════════════════════════════════════════════════════╗\n")
+	fmt.Printf("║                   [DOCKER] NODE.JS CONTAINERS                        ║\n")
+	fmt.Printf("╚══════════════════════════════════════════════════════════════════════╝\n\n")
+
+	if len(containers) == 0 {
+		fmt.Println("  No Node.js Docker containers found")
+		fmt.Println()
+		return
+	}
+
+	fmt.Printf("  Found %d Node.js container(s)\n\n", len(containers))
+
+	for i, container := range containers {
+		c.printDockerContainer(&container, i+1, len(containers), "NODE")
+	}
+}
+
+func (c *ListAllCommand) printDockerErrorSection(runtime string, err error) {
+	fmt.Printf("╔══════════════════════════════════════════════════════════════════════╗\n")
+	fmt.Printf("║                   [DOCKER] %s CONTAINERS%s║\n", runtime, strings.Repeat(" ", 25-len(runtime)))
+	fmt.Printf("╚══════════════════════════════════════════════════════════════════════╝\n\n")
+	fmt.Printf("  [!] Unable to list %s Docker containers: %v\n\n", runtime, err)
 }
 
 func (c *ListAllCommand) printTomcatProcess(proc *discovery.JavaProcess, index, total int) {
@@ -293,16 +335,14 @@ func (c *ListAllCommand) printTomcatProcess(proc *discovery.JavaProcess, index, 
 	}
 
 	configPath := c.getConfigPath(*proc)
-	var configStatus string // Create a single status string
+	var configStatus string
 	if c.fileExists(configPath) {
-		configStatus = "[v] Configured"
+		configStatus = "[✓] Configured"
 	} else {
-		configStatus = "[x] Not configured"
+		configStatus = "[✗] Not configured"
 	}
-	// Print the single string
 	fmt.Printf("  │  Config:        %-48s│\n", truncate(configStatus, 48))
 
-	// If you still want to show the path when configured, add this:
 	if c.fileExists(configPath) {
 		fmt.Printf("  │  Path:          %-48s│\n", truncate(configPath, 48))
 	}
@@ -373,16 +413,24 @@ func (c *ListAllCommand) printSystemdProcess(proc *discovery.JavaProcess, index,
 	fmt.Printf("  └─────────────────────────────────────────────────────────────────┘\n\n")
 }
 
-func (c *ListAllCommand) printDockerContainer(container *discovery.DockerContainer, index, total int) {
+func (c *ListAllCommand) printDockerContainer(container *discovery.DockerContainer, index, total int, runtime string) {
 	// Draw box
 	fmt.Printf("  ┌─────────────────────────────────────────────────────────────────┐\n")
-	fmt.Printf("  │ [DOCKER] Container (%d/%d)%s│\n", index, total, strings.Repeat(" ", 43-len(fmt.Sprintf("%d/%d", index, total))))
+	fmt.Printf("  │ [%s] Container (%d/%d)%s│\n", runtime, index, total, strings.Repeat(" ", 43-len(fmt.Sprintf("%s] Container (%d/%d", runtime, index, total))))
 	fmt.Printf("  ├─────────────────────────────────────────────────────────────────┤\n")
 
 	fmt.Printf("  │  Name:          %-48s│\n", truncate(container.ContainerName, 48))
 	fmt.Printf("  │  ID:            %-48s│\n", truncate(container.ContainerID[:12], 48))
 	fmt.Printf("  │  Image:         %-48s│\n", truncate(fmt.Sprintf("%s:%s", container.ImageName, container.ImageTag), 48))
 	fmt.Printf("  │  Status:        %-48s│\n", truncate(container.Status, 48))
+
+	// Show runtime type
+	if container.IsJava {
+		fmt.Printf("  │  Runtime:       %-48s│\n", truncate("Java", 48))
+	}
+	if container.IsNodeJS {
+		fmt.Printf("  │  Runtime:       %-48s│\n", truncate("Node.js", 48))
+	}
 
 	// Compose info
 	if container.IsCompose {
@@ -391,40 +439,47 @@ func (c *ListAllCommand) printDockerContainer(container *discovery.DockerContain
 		fmt.Printf("  │  Service:       %-48s│\n", truncate(container.ComposeService, 48))
 	}
 
-	// Agent status
-	agentStatus := container.FormatAgentStatus()
-	fmt.Printf("  │  Agent:         %-48s│\n", truncate(agentStatus, 48))
+	// Agent status (mainly for Java containers)
+	if container.IsJava {
+		agentStatus := container.FormatAgentStatus()
+		fmt.Printf("  │  Agent:         %-48s│\n", truncate(agentStatus, 48))
 
-	if container.HasJavaAgent {
-		fmt.Printf("  │  Agent Path:    %-48s│\n", truncate(container.JavaAgentPath, 48))
-	}
+		if container.HasJavaAgent {
+			fmt.Printf("  │  Agent Path:    %-48s│\n", truncate(container.JavaAgentPath, 48))
+		}
 
-	// JAR files
-	if len(container.JarFiles) > 0 {
-		fmt.Printf("  │  JAR Files:     %-48s│\n", truncate(fmt.Sprintf("%d found", len(container.JarFiles)), 48))
-	}
+		// JAR files
+		if len(container.JarFiles) > 0 {
+			fmt.Printf("  │  JAR Files:     %-48s│\n", truncate(fmt.Sprintf("%d found", len(container.JarFiles)), 48))
+		}
 
-	// Instrumentation status
-	if container.Instrumented {
-		fmt.Printf("  │  Status:        [✓] %-44s│\n", truncate("Instrumented", 44))
-	} else {
+		// Instrumentation status
+		if container.Instrumented {
+			fmt.Printf("  │  Status:        [✓] %-44s│\n", truncate("Instrumented", 44))
+		} else {
+			fmt.Printf("  │  Status:        [!] %-44s│\n", truncate("Not instrumented", 44))
+		}
+	} else if container.IsNodeJS {
+		// Node.js specific info (for future use when Node.js agents are added)
+		fmt.Printf("  │  Agent:         %-48s│\n", truncate("❌ None", 48))
 		fmt.Printf("  │  Status:        [!] %-44s│\n", truncate("Not instrumented", 44))
 	}
 
 	fmt.Printf("  └─────────────────────────────────────────────────────────────────┘\n\n")
 }
 
-func (c *ListAllCommand) printSummary(tomcatCount, systemdCount, dockerCount int) {
-	totalCount := tomcatCount + systemdCount + dockerCount
+func (c *ListAllCommand) printSummary(tomcatCount, systemdCount, javaDockerCount, nodeDockerCount int) {
+	totalCount := tomcatCount + systemdCount + javaDockerCount + nodeDockerCount
 
 	fmt.Printf("╔══════════════════════════════════════════════════════════════════════╗\n")
 	fmt.Printf("║                            📊 SUMMARY                                ║\n")
 	fmt.Printf("╚══════════════════════════════════════════════════════════════════════╝\n\n")
 
-	fmt.Printf("  Total Processes:      %d\n", totalCount)
-	fmt.Printf("    🐱 Standalone Tomcat: %d\n", tomcatCount)
-	fmt.Printf("    🔧 Systemd Services:  %d\n", systemdCount)
-	fmt.Printf("    🐳 Docker Containers: %d\n", dockerCount)
+	fmt.Printf("  Total Processes:         %d\n", totalCount)
+	fmt.Printf("    🐱 Standalone Tomcat:   %d\n", tomcatCount)
+	fmt.Printf("    🔧 Systemd Services:    %d\n", systemdCount)
+	fmt.Printf("    ☕ Java Containers:     %d\n", javaDockerCount)
+	fmt.Printf("    🟢 Node.js Containers:  %d\n", nodeDockerCount)
 	fmt.Println()
 }
 
