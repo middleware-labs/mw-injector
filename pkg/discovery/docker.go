@@ -530,11 +530,6 @@ func (dd *DockerDiscoverer) detectJavaProcesses(container *DockerContainer) {
 }
 
 func (dd *DockerDiscoverer) isNodeJSContainer(container *DockerContainer) bool {
-	// TODO:
-	// Wierdly enough, `kind` locally uses some node containers and it is also showing up.
-	// This happens because its keyword based detection.
-	// Check that behavior.
-
 	// Check 1: Image name contains node
 	if strings.Contains(strings.ToLower(container.ImageName), "node") ||
 		strings.Contains(strings.ToLower(container.ImageName), "nodejs") {

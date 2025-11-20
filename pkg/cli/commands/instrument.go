@@ -792,12 +792,6 @@ type ConfigInstrumentDockerCommand struct {
 	configPath string
 }
 
-//	func NewConfigInstrumentDockerCommand(config *types.CommandConfig, configPath string) *ConfigInstrumentDockerCommand {
-//		return &ConfigInstrumentDockerCommand{
-//			config:     config,
-//			configPath: configPath,
-//		}
-//	}
 func NewConfigInstrumentDockerCommand(config *types.CommandConfig, configPath string) *ConfigInstrumentDockerCommand {
 	// If no config path provided, try to find default
 	if configPath == "" {
@@ -813,6 +807,9 @@ func NewConfigInstrumentDockerCommand(config *types.CommandConfig, configPath st
 func (c *ConfigInstrumentDockerCommand) Execute() error {
 	ctx := context.Background()
 
+	//TODO: These checks are present in every Execute() before the command, maybe a
+	// a checker type???
+	//
 	// Check if running as root
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("❌ This command requires root privileges\n   Run with: sudo mw-injector instrument-docker-config [config-file]")

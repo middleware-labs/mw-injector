@@ -111,6 +111,7 @@ type ContainerState struct {
 	OriginalConfig    string `json:"original_config,omitempty"`
 }
 
+// TODO: At some stage we would need some sweet DI magic here.
 // InstrumentContainer instruments a specific Docker container
 func (do *DockerOperations) InstrumentContainer(containerName string, cfg *config.ProcessConfiguration) error {
 	// Discover the container
