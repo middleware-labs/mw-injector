@@ -49,6 +49,7 @@ type ProcessConfiguration struct {
 	// Java agent path
 	JavaAgentPath string `json:"java_agent_path"`
 
+	NodeAgentPath string `json:"node_agent_path"`
 	// Container settings
 	IsContainer   bool   `json:"is_container"`
 	ContainerType string `json:"container_type"` // docker, kubernetes

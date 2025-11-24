@@ -20,6 +20,8 @@ const (
 	// DefaultAgentPath is the default path to mount the agent in containers
 	DefaultContainerAgentPath = "/opt/middleware/agents/middleware-javaagent.jar"
 
+	DefaultContainerAgentNodePath = "/opt/middleware/agents/node-autoinst.tar"
+
 	// StateFile stores instrumented container information
 	StateFile = "/etc/middleware/docker/instrumented.json"
 )
@@ -114,6 +116,8 @@ type ContainerState struct {
 // InstrumentContainer instruments a specific Docker container
 func (do *DockerOperations) InstrumentContainer(containerName string, cfg *config.ProcessConfiguration) error {
 	// Discover the container
+	pp.Println("here lols")
+	pp.Println("Container name: ", containerName)
 	container, err := do.discoverer.GetContainerByName(containerName)
 	if err != nil {
 		return fmt.Errorf("container not found: %w", err)
@@ -126,10 +130,22 @@ func (do *DockerOperations) InstrumentContainer(containerName string, cfg *confi
 
 	// Determine instrumentation strategy
 	if container.IsCompose {
-		return do.instrumentComposeContainer(container, cfg)
+		pp.Println("Compose container")
+		if container.IsJava {
+			return do.instrumentComposeContainer(container, cfg)
+		} else if container.IsNodeJS {
+			pp.Println("Haa mar baap")
+			return do.instrumentComposeNodeContainer(container, cfg)
+		}
 	}
 
-	return do.instrumentStandaloneContainer(container, cfg)
+	if container.IsJava {
+		return do.instrumentStandaloneContainer(container, cfg)
+	} else if container.IsNodeJS {
+		// return do.instrumentStandaloneNodeContainer()
+	}
+
+	return fmt.Errorf("can't decide container type.")
 }
 
 // instrumentStandaloneContainer instruments a standalone Docker container
@@ -366,6 +382,36 @@ func (do *DockerOperations) instrumentComposeContainer(container *discovery.Dock
 
 	fmt.Printf("   ✅ Container %s instrumented successfully\n", container.ContainerName)
 	return nil
+}
+
+func (do *DockerOperations) instrumentComposeNodeContainer(
+	container *discovery.DockerContainer,
+	cfg *config.ProcessConfiguration,
+) error {
+	fmt.Printf("🔧 Instrumenting Docker Compose container: %s\n", container.ContainerName)
+	if container.ComposeFile == "" {
+		return fmt.Errorf("compose file not found for container %s", container.ContainerName)
+	}
+	pp.Println("Compose File for node: ", container.ComposeFile)
+	modifier := NewComposeModifier(container.ComposeFile)
+
+	// Step 1: Validate compose file
+	if err := modifier.ValidateComposeFile(); err != nil {
+		return fmt.Errorf("invalid compose file: %w", err)
+	}
+
+	// Step 2: Create backup
+	backupPath, err := modifier.BackupComposeFile()
+	if err != nil {
+		fmt.Printf("   ⚠️  Warning: Could not backup compose file: %v\n", err)
+		backupPath = "" // Continue without backup
+	} else {
+		fmt.Printf("   ✅ Backup created: %s\n", filepath.Base(backupPath))
+	}
+
+	pp.Println("backup path: ", backupPath)
+
+	return fmt.Errorf("naa maar baap, haji baaki chhe")
 }
 
 // buildOriginalDockerRunCommand creates the original docker run command before instrumentation

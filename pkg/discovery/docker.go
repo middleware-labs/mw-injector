@@ -33,7 +33,10 @@ type DockerContainer struct {
 	JavaProcesses []string `json:"java.processes,omitempty"`
 	JarFiles      []string `json:"java.jar_files,omitempty"`
 
-	IsNodeJS bool `json:"node.detected"`
+	IsNodeJS               bool   `json:"node.detected"`
+	HasMiddlewareNodeAgent bool   `json:"middleware.node.agent.detected,omitempty"`
+	NodeAgentPath          string `json:"node.agent.path,omitempty"`
+
 	// Instrumentation detection
 	HasJavaAgent      bool   `json:"java.agent.present"`
 	JavaAgentPath     string `json:"java.agent.path,omitempty"`
@@ -397,6 +400,19 @@ func (dd *DockerDiscoverer) detectContainerInstrumentation(container *DockerCont
 		}
 	}
 
+	if nodeOptions, ok := container.Environment["NODE_OPTIONS"]; ok {
+		if strings.Contains(nodeOptions, "mw-register.js") {
+			container.HasMiddlewareNodeAgent = true
+			agentPath := dd.extractNodeAgentPathFromEnv(nodeOptions)
+			container.NodeAgentPath = agentPath
+
+			if dd.isMiddlewareAgent(agentPath) {
+				container.IsMiddlewareAgent = true
+				container.Instrumented = true
+			}
+		}
+	}
+
 	// Check OTEL configuration
 	if serviceName, ok := container.Environment["OTEL_SERVICE_NAME"]; ok {
 		container.OTELServiceName = serviceName
@@ -418,6 +434,22 @@ func (dd *DockerDiscoverer) detectContainerInstrumentation(container *DockerCont
 func (dd *DockerDiscoverer) extractAgentPathFromEnv(envValue string) string {
 	if idx := strings.Index(envValue, "-javaagent:"); idx != -1 {
 		agentPart := envValue[idx+len("-javaagent:"):]
+		if spaceIdx := strings.Index(agentPart, " "); spaceIdx != -1 {
+			agentPart = agentPart[:spaceIdx]
+		}
+		// Remove agent arguments if present (agent.jar=arg1,arg2)
+		if eqIdx := strings.Index(agentPart, "="); eqIdx != -1 {
+			return agentPart[:eqIdx]
+		}
+		return agentPart
+	}
+	return ""
+}
+
+// extractAgentPathFromEnv extracts node agent path from NODE_OPTIONS
+func (dd *DockerDiscoverer) extractNodeAgentPathFromEnv(envValue string) string {
+	if idx := strings.Index(envValue, "NODE_OPTIONS"); idx != -1 {
+		agentPart := envValue[idx+len("--import "):]
 		if spaceIdx := strings.Index(agentPart, " "); spaceIdx != -1 {
 			agentPart = agentPart[:spaceIdx]
 		}
@@ -614,6 +646,8 @@ func (dd *DockerDiscoverer) extractJarFilesFromCommand(cmdline string) []string 
 // GetContainerByName finds a container by name
 func (dd *DockerDiscoverer) GetContainerByName(name string) (*DockerContainer, error) {
 	containers, err := dd.DiscoverJavaContainers()
+	nodeContainers, err := dd.DiscoverNodeContainers()
+	containers = append(containers, nodeContainers...)
 	if err != nil {
 		return nil, err
 	}
