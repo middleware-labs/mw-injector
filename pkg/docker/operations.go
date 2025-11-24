@@ -1,15 +1,23 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/client"
 	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/config"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
@@ -28,16 +36,22 @@ const (
 type DockerOperations struct {
 	ctx           context.Context
 	discoverer    *discovery.DockerDiscoverer
-	hostAgentPath string
+	hostAgentPath string // TODO: Make this name better. Its not exactly a hostAgent
+	cli           *client.Client
 }
 
 // NewDockerOperations creates a new Docker operations handler
-func NewDockerOperations(ctx context.Context, hostAgentPath string) *DockerOperations {
+func NewDockerOperations(ctx context.Context, hostAgentPath string) (*DockerOperations, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return nil, fmt.Errorf("could not create a client for docker operations %v", err.Error())
+	}
 	return &DockerOperations{
 		ctx:           ctx,
 		discoverer:    discovery.NewDockerDiscoverer(ctx),
 		hostAgentPath: hostAgentPath,
-	}
+		cli:           cli,
+	}, nil
 }
 
 // InstrumentedState represents the state of instrumented containers
@@ -136,57 +150,28 @@ func (do *DockerOperations) InstrumentContainer(containerName string, cfg *confi
 func (do *DockerOperations) instrumentStandaloneContainer(container *discovery.DockerContainer, cfg *config.ProcessConfiguration) error {
 	fmt.Printf("🔧 Instrumenting standalone container: %s\n", container.ContainerName)
 
-	// Step 1: Get and save original container configuration BEFORE making any changes
+	// Step 1: Get original container configuration
 	containerConfig, err := do.getContainerConfig(container.ContainerID)
 	if err != nil {
 		return fmt.Errorf("failed to get container config: %w", err)
 	}
 
-	// Save original configuration as JSON string for restoration
-	originalConfigBytes, err := json.Marshal(containerConfig)
-	if err != nil {
-		return fmt.Errorf("failed to serialize original config: %w", err)
-	}
-
-	// Build original recreation command from current state (before instrumentation)
-	originalRecreationCommand := do.buildOriginalDockerRunCommand(containerConfig, container.ContainerName)
-
-	// Step 2: Copy agent to container
-	if err := do.copyAgentToContainer(container.ContainerID); err != nil {
-		return fmt.Errorf("failed to copy agent: %w", err)
-	}
-	fmt.Println("   ✅ Agent copied to container")
-
-	// Step 3: Build new environment variables with instrumentation
+	// Step 2: Build new environment variables with instrumentation
 	newEnv := do.buildInstrumentationEnv(container, cfg)
 
-	// Step 4: Stop the container
-	fmt.Println("   🛑 Stopping container...")
-	if err := do.stopContainer(container.ContainerID); err != nil {
-		return fmt.Errorf("failed to stop container: %w", err)
+	// Convert map to slice format
+	envSlice := make([]string, 0, len(newEnv))
+	for k, v := range newEnv {
+		envSlice = append(envSlice, fmt.Sprintf("%s=%s", k, v))
 	}
 
-	// Step 5: Commit container to preserve any changes
-	newImageName := fmt.Sprintf("%s-mw-instrumented:latest", container.ContainerName)
-	if err := do.commitContainer(container.ContainerID, newImageName); err != nil {
-		fmt.Printf("   ⚠️  Warning: Could not commit container: %v\n", err)
-		// Use original image name if commit fails
-		newImageName = container.ImageName + ":" + container.ImageTag
-	}
-
-	// Step 6: Remove old container
-	if err := do.removeContainer(container.ContainerID); err != nil {
-		return fmt.Errorf("failed to remove old container: %w", err)
-	}
-
-	// Step 7: Recreate container with instrumentation using the committed image
-	instrumentedRunCommand := do.buildInstrumentedDockerRunCommand(containerConfig, newEnv, container.ContainerName, newImageName)
-	if err := do.runContainer(instrumentedRunCommand); err != nil {
+	// Step 3: Recreate container with volume mount + new environment
+	if err := do.recreateContainerWithAPI(*containerConfig, envSlice); err != nil {
 		return fmt.Errorf("failed to recreate container: %w", err)
 	}
 
-	// Step 8: Save state with ORIGINAL recreation command for proper restoration
-	if err := do.saveContainerStateWithCommand(container, cfg, originalRecreationCommand, string(originalConfigBytes)); err != nil {
+	// Step 4: Save state
+	if err := do.saveContainerState(container, cfg); err != nil {
 		fmt.Printf("   ⚠️  Warning: Could not save state: %v\n", err)
 	}
 
@@ -195,10 +180,13 @@ func (do *DockerOperations) instrumentStandaloneContainer(container *discovery.D
 }
 
 // buildInstrumentedDockerRunCommand creates docker run command with instrumentation
-func (do *DockerOperations) buildInstrumentedDockerRunCommand(config map[string]interface{}, env map[string]string, containerName, imageName string) string {
+func (do *DockerOperations) buildInstrumentedDockerRunCommand(config container.InspectResponse, env map[string]string, containerName, imageName string) string {
+	pp.Println("BUILDING INSTRUMENTED DOCKER RUN COMMAND")
 	var cmdParts []string
 	cmdParts = append(cmdParts, "docker", "run", "-d")
 	cmdParts = append(cmdParts, "--name", containerName)
+
+	configSection := config.Config
 
 	// Add environment variables (with instrumentation)
 	for k, v := range env {
@@ -206,19 +194,14 @@ func (do *DockerOperations) buildInstrumentedDockerRunCommand(config map[string]
 	}
 
 	// Add original volume mounts
-	if mounts, ok := config["Mounts"].([]interface{}); ok {
-		for _, m := range mounts {
-			if mount, ok := m.(map[string]interface{}); ok {
-				src, srcOk := mount["Source"].(string)
-				dst, dstOk := mount["Destination"].(string)
-
-				if srcOk && dstOk {
-					mode := "rw"
-					if rw, ok := mount["RW"].(bool); ok && !rw {
-						mode = "ro"
-					}
-					cmdParts = append(cmdParts, "-v", fmt.Sprintf("%s:%s:%s", src, dst, mode))
+	if len(config.Mounts) > 0 {
+		for _, m := range config.Mounts {
+			if m.Source != "" && m.Destination != "" {
+				mode := "rw"
+				if !m.RW {
+					mode = "ro"
 				}
+				cmdParts = append(cmdParts, "-v", fmt.Sprintf("%s:%s:%s", m.Source, m.Destination, mode))
 			}
 		}
 	}
@@ -227,18 +210,17 @@ func (do *DockerOperations) buildInstrumentedDockerRunCommand(config map[string]
 	cmdParts = append(cmdParts, "-v", fmt.Sprintf("%s:%s:ro", do.hostAgentPath, DefaultContainerAgentPath))
 
 	// Add port mappings
-	if networkSettings, ok := config["NetworkSettings"].(map[string]interface{}); ok {
-		if ports, ok := networkSettings["Ports"].(map[string]interface{}); ok {
+	if networkSettings := config.NetworkSettings; networkSettings != nil {
+		if ports := networkSettings.Ports; ports != nil {
 			for containerPort, bindings := range ports {
-				if bindingList, ok := bindings.([]interface{}); ok && len(bindingList) > 0 {
-					if binding, ok := bindingList[0].(map[string]interface{}); ok {
-						if hostPort, ok := binding["HostPort"].(string); ok && hostPort != "" {
-							hostIP := "0.0.0.0"
-							if hip, ok := binding["HostIp"].(string); ok && hip != "" {
-								hostIP = hip
-							}
-							cmdParts = append(cmdParts, "-p", fmt.Sprintf("%s:%s:%s", hostIP, hostPort, containerPort))
+				if len(bindings) > 0 {
+					binding := bindings[0]
+					if binding.HostPort != "" {
+						hostIP := "0.0.0.0"
+						if binding.HostIP != "" {
+							hostIP = binding.HostIP
 						}
+						cmdParts = append(cmdParts, "-p", fmt.Sprintf("%s:%s:%s", hostIP, binding.HostPort, containerPort))
 					}
 				}
 			}
@@ -246,9 +228,9 @@ func (do *DockerOperations) buildInstrumentedDockerRunCommand(config map[string]
 	}
 
 	// Add networks
-	if networkSettings, ok := config["NetworkSettings"].(map[string]interface{}); ok {
-		if networks, ok := networkSettings["Networks"].(map[string]interface{}); ok {
-			for networkName := range networks {
+	if config.NetworkSettings != nil {
+		if networks := config.NetworkSettings.Networks; networks != nil {
+			for networkName := range config.NetworkSettings.Networks {
 				if networkName != "bridge" {
 					cmdParts = append(cmdParts, "--network", networkName)
 				}
@@ -257,43 +239,37 @@ func (do *DockerOperations) buildInstrumentedDockerRunCommand(config map[string]
 	}
 
 	// Add restart policy
-	if hostConfig, ok := config["HostConfig"].(map[string]interface{}); ok {
-		if restartPolicy, ok := hostConfig["RestartPolicy"].(map[string]interface{}); ok {
-			if name, ok := restartPolicy["Name"].(string); ok && name != "" && name != "no" {
-				if maxRetries, ok := restartPolicy["MaximumRetryCount"].(float64); ok && maxRetries > 0 {
-					cmdParts = append(cmdParts, "--restart", fmt.Sprintf("%s:%d", name, int(maxRetries)))
-				} else {
-					cmdParts = append(cmdParts, "--restart", name)
-				}
-			}
-		}
 
-		// Add working directory
-		if configSection, ok := config["Config"].(map[string]interface{}); ok {
-			if workingDir, ok := configSection["WorkingDir"].(string); ok && workingDir != "" {
-				cmdParts = append(cmdParts, "--workdir", workingDir)
-			}
-
-			// Add user
-			if user, ok := configSection["User"].(string); ok && user != "" {
-				cmdParts = append(cmdParts, "--user", user)
-			}
-
-			// Add original command
-			if cmd, ok := configSection["Cmd"].([]interface{}); ok && len(cmd) > 0 {
-				cmdParts = append(cmdParts, imageName)
-				for _, c := range cmd {
-					if cStr, ok := c.(string); ok {
-						cmdParts = append(cmdParts, cStr)
-					}
-				}
-				return strings.Join(cmdParts, " ")
+	if hostConfig := config.HostConfig; hostConfig != nil {
+		if name := hostConfig.RestartPolicy.Name; name != "" && name != "no" {
+			if maxRetries := hostConfig.RestartPolicy.MaximumRetryCount; maxRetries > 0 {
+				cmdParts = append(cmdParts, "--restart", fmt.Sprintf("%s:%d", name, int(maxRetries)))
+			} else {
+				cmdParts = append(cmdParts, "--restart", string(name))
 			}
 		}
 	}
 
+	if workingDir := configSection.WorkingDir; workingDir != "" {
+		cmdParts = append(cmdParts, "--workdir", workingDir)
+	}
+
+	if user := configSection.User; user != "" {
+		cmdParts = append(cmdParts, "--user", user)
+	}
+
 	// Add image
-	cmdParts = append(cmdParts, imageName)
+	if image := configSection.Image; image != "" {
+		cmdParts = append(cmdParts, image)
+	}
+
+	if cmd := configSection.Cmd; len(cmd) > 0 {
+		for _, c := range cmd {
+			cmdParts = append(cmdParts, c)
+		}
+	}
+
+	pp.Println("ORIGINAL COMMAND: ", strings.Join(cmdParts, " "))
 
 	return strings.Join(cmdParts, " ")
 }
@@ -369,77 +345,61 @@ func (do *DockerOperations) instrumentComposeContainer(container *discovery.Dock
 }
 
 // buildOriginalDockerRunCommand creates the original docker run command before instrumentation
-func (do *DockerOperations) buildOriginalDockerRunCommand(config map[string]interface{}, containerName string) string {
+func (do *DockerOperations) buildOriginalDockerRunCommand(config *container.InspectResponse, containerName string) string {
 	var cmdParts []string
 	cmdParts = append(cmdParts, "docker", "run", "-d")
 	cmdParts = append(cmdParts, "--name", containerName)
 
-	configSection, ok := config["Config"].(map[string]interface{})
-	if !ok {
-		return ""
-	}
+	configSection := config.Config
 
 	// Add original environment variables (without instrumentation)
-	if env, ok := configSection["Env"].([]interface{}); ok {
-		for _, e := range env {
-			if envStr, ok := e.(string); ok {
-				// Skip any existing MW_ or OTEL_ variables and JAVA_TOOL_OPTIONS with javaagent
-				if !strings.HasPrefix(envStr, "MW_") &&
-					!strings.HasPrefix(envStr, "OTEL_") &&
-					!(strings.HasPrefix(envStr, "JAVA_TOOL_OPTIONS=") && strings.Contains(envStr, "javaagent")) {
-					cmdParts = append(cmdParts, "-e", envStr)
-				}
-			}
+	for _, e := range configSection.Env {
+		if !strings.HasPrefix(e, "MW_") &&
+			!strings.HasPrefix(e, "OTEL_") &&
+			!(strings.HasPrefix(e, "JAVA_TOOL_OPTIONS=") && strings.Contains(e, "javaagent")) {
+
+			cmdParts = append(cmdParts, "-e", e)
 		}
 	}
 
 	// Add original volume mounts (excluding our agent mount)
-	if mounts, ok := config["Mounts"].([]interface{}); ok {
-		for _, m := range mounts {
-			if mount, ok := m.(map[string]interface{}); ok {
-				src, srcOk := mount["Source"].(string)
-				dst, dstOk := mount["Destination"].(string)
+	for _, mount := range config.Mounts {
+		src := mount.Source
+		dst := mount.Destination
 
-				if srcOk && dstOk {
-					// Skip our agent mount
-					if dst == DefaultContainerAgentPath {
-						continue
-					}
-
-					mode := "rw"
-					if rw, ok := mount["RW"].(bool); ok && !rw {
-						mode = "ro"
-					}
-					cmdParts = append(cmdParts, "-v", fmt.Sprintf("%s:%s:%s", src, dst, mode))
-				}
+		if src != "" && dst != "" {
+			if dst == DefaultContainerAgentPath {
+				continue
 			}
+			mode := "rw"
+			if !mount.RW {
+				mode = "ro"
+			}
+			cmdParts = append(cmdParts, "-v", fmt.Sprintf("%s:%s:%s", src, dst, mode))
 		}
 	}
 
 	// Add port mappings
-	if networkSettings, ok := config["NetworkSettings"].(map[string]interface{}); ok {
-		if ports, ok := networkSettings["Ports"].(map[string]interface{}); ok {
-			for containerPort, bindings := range ports {
-				if bindingList, ok := bindings.([]interface{}); ok && len(bindingList) > 0 {
-					if binding, ok := bindingList[0].(map[string]interface{}); ok {
-						if hostPort, ok := binding["HostPort"].(string); ok && hostPort != "" {
-							hostIP := "0.0.0.0"
-							if hip, ok := binding["HostIp"].(string); ok && hip != "" {
-								hostIP = hip
-							}
-							cmdParts = append(cmdParts, "-p", fmt.Sprintf("%s:%s:%s", hostIP, hostPort, containerPort))
-						}
+	if config.NetworkSettings != nil {
+		for containerPort, bindings := range config.NetworkSettings.NetworkSettingsBase.Ports {
+			if len(bindings) > 0 {
+				binding := bindings[0]
+				if binding.HostPort != "" {
+					hostIP := "0.0.0.0"
+					if binding.HostIP != "" {
+						hostIP = binding.HostIP
 					}
+					cmdParts = append(cmdParts, "-p", fmt.Sprintf("%s:%s:%s", hostIP, binding.HostPort, containerPort))
 				}
 			}
 		}
 	}
 
 	// Add networks
-	if networkSettings, ok := config["NetworkSettings"].(map[string]interface{}); ok {
-		if networks, ok := networkSettings["Networks"].(map[string]interface{}); ok {
-			for networkName := range networks {
-				if networkName != "bridge" { // Skip default bridge network
+	if config.NetworkSettings != nil {
+		if config.NetworkSettings.Networks != nil {
+			for networkName := range config.NetworkSettings.Networks {
+				if networkName != "bridge" {
 					cmdParts = append(cmdParts, "--network", networkName)
 				}
 			}
@@ -447,42 +407,37 @@ func (do *DockerOperations) buildOriginalDockerRunCommand(config map[string]inte
 	}
 
 	// Add restart policy
-	if hostConfig, ok := config["HostConfig"].(map[string]interface{}); ok {
-		if restartPolicy, ok := hostConfig["RestartPolicy"].(map[string]interface{}); ok {
-			if name, ok := restartPolicy["Name"].(string); ok && name != "" && name != "no" {
-				if maxRetries, ok := restartPolicy["MaximumRetryCount"].(float64); ok && maxRetries > 0 {
-					cmdParts = append(cmdParts, "--restart", fmt.Sprintf("%s:%d", name, int(maxRetries)))
-				} else {
-					cmdParts = append(cmdParts, "--restart", name)
-				}
+	if hostConfig := config.HostConfig; hostConfig != nil {
+		if name := hostConfig.RestartPolicy.Name; name != "" && name != "no" {
+			if maxRetries := hostConfig.RestartPolicy.MaximumRetryCount; maxRetries > 0 {
+				cmdParts = append(cmdParts, "--restart", fmt.Sprintf("%s:%d", name, int(maxRetries)))
+			} else {
+				cmdParts = append(cmdParts, "--restart", string(name))
 			}
 		}
 
-		// Add working directory
-		if workingDir, ok := configSection["WorkingDir"].(string); ok && workingDir != "" {
-			cmdParts = append(cmdParts, "--workdir", workingDir)
-		}
+	}
 
-		// Add user
-		if user, ok := configSection["User"].(string); ok && user != "" {
-			cmdParts = append(cmdParts, "--user", user)
-		}
+	if workingDir := configSection.WorkingDir; workingDir != "" {
+		cmdParts = append(cmdParts, "--workdir", workingDir)
+	}
+
+	if user := configSection.User; user != "" {
+		cmdParts = append(cmdParts, "--user", user)
 	}
 
 	// Add original image
-	if image, ok := configSection["Image"].(string); ok {
+	if image := configSection.Image; image != "" {
 		cmdParts = append(cmdParts, image)
 	}
 
 	// Add original command
-	if cmd, ok := configSection["Cmd"].([]interface{}); ok && len(cmd) > 0 {
+	if cmd := configSection.Cmd; len(cmd) > 0 {
 		for _, c := range cmd {
-			if cStr, ok := c.(string); ok {
-				cmdParts = append(cmdParts, cStr)
-			}
+			cmdParts = append(cmdParts, c)
 		}
 	}
-
+	pp.Println("ORIGINAL COMMAND: ", strings.Join(cmdParts, " "))
 	return strings.Join(cmdParts, " ")
 }
 
@@ -502,35 +457,284 @@ func (do *DockerOperations) saveContainerStateWithCommand(container *discovery.D
 		OriginalEnv:       container.Environment,
 		ComposeFile:       container.ComposeFile,
 		ComposeService:    container.ComposeService,
-		RecreationCommand: recreationCommand, // Now properly set!
-		OriginalConfig:    originalConfig,    // Full original config for debugging
+		RecreationCommand: recreationCommand,
+		OriginalConfig:    originalConfig, // Full original config for debugging
 	}
 	state.UpdatedAt = time.Now()
 
 	return do.saveState(state)
 }
 
-// UninstrumentContainer removes instrumentation from a container
 func (do *DockerOperations) UninstrumentContainer(containerName string) error {
-	// Load state to check if container was instrumented by us
-	state, err := do.loadState()
+	// Strategy 1: Try label-based uninstrumentation first (new approach)
+	listOptions := container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("name", containerName),
+			filters.Arg("label", LabelInstrumented+"=true"),
+		),
+	}
+
+	containers, err := do.cli.ContainerList(do.ctx, listOptions)
 	if err != nil {
-		return fmt.Errorf("failed to load state: %w", err)
+		return err
 	}
 
-	containerState, exists := state.Containers[containerName]
-	if !exists {
-		return fmt.Errorf("container %s was not instrumented by this tool", containerName)
+	if len(containers) > 0 {
+		// Found container with labels - use label-based restoration
+		fmt.Printf("🔧 Found container with instrumentation labels\n")
+		info, err := do.GetContainerInstrumentationInfo(containers[0].ID)
+		if err != nil {
+			return fmt.Errorf("failed to get instrumentation info: %w", err)
+		}
+		return do.restoreContainerFromLabels(containers[0].ID, info)
 	}
 
-	fmt.Printf("🔧 Uninstrumenting container: %s\n", containerName)
-
-	// Check if it's a compose container
-	if containerState.ComposeFile != "" {
-		return do.uninstrumentComposeContainer(&containerState)
+	// Strategy 2: Check state file (old approach)
+	state, err := do.loadState()
+	if err == nil {
+		if containerState, exists := state.Containers[containerName]; exists {
+			fmt.Printf("🔧 Found container in state file\n")
+			if containerState.ComposeFile != "" {
+				return do.uninstrumentComposeContainer(&containerState)
+			} else {
+				return do.uninstrumentStandaloneContainer(&containerState)
+			}
+		}
 	}
 
-	return do.uninstrumentStandaloneContainer(&containerState)
+	// Strategy 3: Try to detect compose information and restore from backup
+	listOptionsAny := container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("name", containerName)),
+	}
+
+	containers, err = do.cli.ContainerList(do.ctx, listOptionsAny)
+	if err != nil {
+		return err
+	}
+
+	if len(containers) == 0 {
+		return fmt.Errorf("container %s not found", containerName)
+	}
+
+	containerInfo := containers[0]
+	composeFile, composeService := do.detectComposeInfo(containerInfo)
+	if composeFile != "" {
+		fmt.Printf("🔧 Detected compose container, attempting backup restoration\n")
+		return do.restoreComposeFile(composeFile, composeService)
+	}
+
+	// Strategy 4: Manual removal of instrumentation environment variables
+	fmt.Printf("⚠️  Unable to automatically uninstrument container %s\n", containerName)
+	fmt.Printf("💡 Manual steps to uninstrument:\n")
+	fmt.Printf("   1. Remove JAVA_TOOL_OPTIONS containing javaagent\n")
+	fmt.Printf("   2. Remove MW_* environment variables\n")
+	fmt.Printf("   3. Remove OTEL_* environment variables\n")
+	fmt.Printf("   4. Remove agent volume mount: %s\n", DefaultContainerAgentPath)
+	fmt.Printf("   5. Restart the container\n")
+
+	return fmt.Errorf("unable to determine how to uninstrument container %s", containerName)
+}
+
+func (do *DockerOperations) uninstrumentComposeContainerByName(containerName string) error {
+	// Look for the container without label filter
+	listOptions := container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("name", containerName)),
+	}
+
+	containers, err := do.cli.ContainerList(do.ctx, listOptions)
+	if err != nil {
+		return err
+	}
+
+	if len(containers) == 0 {
+		return fmt.Errorf("container %s not found", containerName)
+	}
+
+	container := containers[0]
+
+	// Try to find the compose file and restore from backup
+	composeFile, composeService := do.detectComposeInfo(container)
+	if composeFile != "" {
+		return do.restoreComposeFile(composeFile, composeService)
+	}
+
+	return fmt.Errorf("unable to determine how to uninstrument container %s", containerName)
+}
+
+func (do *DockerOperations) detectComposeInfo(container types.Container) (string, string) {
+	// Check compose labels
+	if projectName := container.Labels["com.docker.compose.project"]; projectName != "" {
+		if service := container.Labels["com.docker.compose.service"]; service != "" {
+			if workingDir := container.Labels["com.docker.compose.project.working_dir"]; workingDir != "" {
+				// Look for docker-compose.yaml in the working directory
+				possibleFiles := []string{
+					filepath.Join(workingDir, "docker-compose.yaml"),
+					filepath.Join(workingDir, "docker-compose.yml"),
+				}
+
+				for _, file := range possibleFiles {
+					if _, err := os.Stat(file); err == nil {
+						return file, service
+					}
+				}
+			}
+		}
+	}
+
+	return "", ""
+}
+
+func (do *DockerOperations) restoreComposeFile(composeFile, serviceName string) error {
+	backupFile := composeFile + ".backup"
+
+	if _, err := os.Stat(backupFile); err == nil {
+		// Restore from backup
+		if err := do.copyFile(backupFile, composeFile); err != nil {
+			return fmt.Errorf("failed to restore compose file: %w", err)
+		}
+
+		fmt.Printf("   ✅ Restored %s from backup\n", filepath.Base(composeFile))
+
+		// Recreate the service
+		return do.recreateComposeServiceFromFile(composeFile, serviceName)
+	}
+
+	return fmt.Errorf("backup file not found: %s", backupFile)
+}
+
+func (do *DockerOperations) recreateComposeServiceFromFile(composeFile, serviceName string) error {
+	workingDir := filepath.Dir(composeFile)
+
+	// Change to compose file directory
+	originalDir, _ := os.Getwd()
+	defer os.Chdir(originalDir)
+
+	if err := os.Chdir(workingDir); err != nil {
+		return fmt.Errorf("failed to change to working directory: %w", err)
+	}
+
+	fmt.Printf("   Working directory: %s\n", workingDir)
+
+	// Stop and remove the existing container first
+	fmt.Println("   Stopping existing container...")
+	stopCmd := exec.CommandContext(do.ctx, "docker-compose", "stop", serviceName)
+	if output, err := stopCmd.CombinedOutput(); err != nil {
+		fmt.Printf("   Warning: Failed to stop container: %s\n", string(output))
+	}
+
+	fmt.Println("   Removing existing container...")
+	rmCmd := exec.CommandContext(do.ctx, "docker-compose", "rm", "-f", serviceName)
+	if output, err := rmCmd.CombinedOutput(); err != nil {
+		fmt.Printf("   Warning: Failed to remove container: %s\n", string(output))
+	}
+
+	// Recreate with restored compose file
+	fmt.Println("   Creating new container from restored compose file...")
+	cmd := exec.CommandContext(do.ctx, "docker-compose", "up", "-d", serviceName)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf("   Docker-compose error output: %s\n", string(output))
+		return fmt.Errorf("failed to recreate service: %w", err)
+	}
+
+	return nil
+}
+
+// Add this method to pkg/docker/operations.go
+func (do *DockerOperations) restoreContainerFromLabels(containerID string, info *InstrumentationInfo) error {
+	fmt.Printf("🔧 Restoring container to original state: %s\n", containerID[:12])
+
+	// Get current container info
+	containerInfo, err := do.cli.ContainerInspect(do.ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("failed to inspect container: %w", err)
+	}
+
+	// Parse original configuration from labels
+	var originalConfig container.Config
+	if info.OriginalConfig != "" {
+		if err := json.Unmarshal([]byte(info.OriginalConfig), &originalConfig); err != nil {
+			return fmt.Errorf("failed to parse original config: %w", err)
+		}
+	} else {
+		// Fallback: use current config but restore original environment
+		originalConfig = *containerInfo.Config
+	}
+
+	// Restore original environment variables
+	originalEnvSlice := make([]string, 0, len(info.OriginalEnv))
+	for k, v := range info.OriginalEnv {
+		originalEnvSlice = append(originalEnvSlice, fmt.Sprintf("%s=%s", k, v))
+	}
+	originalConfig.Env = originalEnvSlice
+
+	// Remove instrumentation labels
+	if originalConfig.Labels == nil {
+		originalConfig.Labels = make(map[string]string)
+	}
+	cleanLabels := make(map[string]string)
+	for k, v := range originalConfig.Labels {
+		// Skip middleware instrumentation labels
+		if !strings.HasPrefix(k, "middleware.") {
+			cleanLabels[k] = v
+		}
+	}
+	originalConfig.Labels = cleanLabels
+
+	// Create host config without agent volume mount
+	originalHostConfig := *containerInfo.HostConfig
+
+	// Remove agent volume mount
+	var cleanBinds []string
+	for _, bind := range originalHostConfig.Binds {
+		// Skip the agent mount
+		if !strings.Contains(bind, DefaultContainerAgentPath) {
+			cleanBinds = append(cleanBinds, bind)
+		}
+	}
+	originalHostConfig.Binds = cleanBinds
+
+	// Get container name
+	containerName := containerInfo.Name
+	if strings.HasPrefix(containerName, "/") {
+		containerName = containerName[1:]
+	}
+
+	// Stop and remove current container
+	if err := do.stopContainer(containerID); err != nil {
+		return fmt.Errorf("failed to stop container: %w", err)
+	}
+
+	if err := do.removeContainer(containerID); err != nil {
+		return fmt.Errorf("failed to remove container: %w", err)
+	}
+
+	// Create restored container
+	resp, err := do.cli.ContainerCreate(
+		do.ctx,
+		&originalConfig,
+		&originalHostConfig,
+		&network.NetworkingConfig{
+			EndpointsConfig: containerInfo.NetworkSettings.Networks,
+		},
+		nil, // platform
+		containerName,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create restored container: %w", err)
+	}
+
+	// Start the restored container
+	if err := do.cli.ContainerStart(do.ctx, resp.ID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("failed to start restored container: %w", err)
+	}
+
+	fmt.Printf("   ✅ Container %s restored to original configuration\n", containerName)
+	return nil
 }
 
 // uninstrumentStandaloneContainer removes instrumentation from standalone container
@@ -595,20 +799,58 @@ func (do *DockerOperations) uninstrumentComposeContainer(state *ContainerState) 
 
 // copyAgentToContainer copies the agent JAR to a running container
 func (do *DockerOperations) copyAgentToContainer(containerID string) error {
-	// Create directory in container
-	mkdirCmd := exec.CommandContext(do.ctx, "docker", "exec", containerID, "mkdir", "-p", "/opt/middleware/agents")
-	if err := mkdirCmd.Run(); err != nil {
-		// Try without mkdir if it fails (some distroless images don't have mkdir)
-		fmt.Println("   ⚠️  Could not create directory, trying direct copy...")
+	agentFileContent, err := os.ReadFile(do.hostAgentPath)
+	if err != nil {
+		return fmt.Errorf("failed to read agent file: %w", err)
+	}
+	tarBuffer, err := do.createAgentTar(agentFileContent)
+	if err != nil {
+		return fmt.Errorf("failed to create Agent tar: %w", err)
 	}
 
-	// Copy agent file
-	containerPath := containerID + ":" + DefaultContainerAgentPath
-	cmd := exec.CommandContext(do.ctx, "docker", "cp", do.hostAgentPath, containerPath)
-	return cmd.Run()
+	err = do.cli.CopyToContainer(
+		do.ctx,
+		containerID,
+		"/opt/middleware/agents/",
+		tarBuffer,
+		container.CopyToContainerOptions{
+			AllowOverwriteDirWithFile: false,
+		},
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to copy agent to container: %w", err)
+	}
+
+	fmt.Println("   ✅ Agent copied to container via Docker API")
+	return nil
 }
 
-// buildInstrumentationEnv builds environment variables for instrumentation
+func (do *DockerOperations) createAgentTar(agentContent []byte) (*bytes.Buffer, error) {
+	tarBuffer := &bytes.Buffer{}
+	tarWriter := tar.NewWriter(tarBuffer)
+	defer tarWriter.Close()
+
+	// Create tar header for the agent file
+	header := &tar.Header{
+		Name:     "middleware-javaagent.jar",
+		Size:     int64(len(agentContent)),
+		Mode:     0644,
+		ModTime:  time.Now(),
+		Typeflag: tar.TypeReg,
+	}
+
+	if err := tarWriter.WriteHeader(header); err != nil {
+		return nil, err
+	}
+
+	if _, err := tarWriter.Write(agentContent); err != nil {
+		return nil, err
+	}
+
+	return tarBuffer, nil
+}
+
 func (do *DockerOperations) buildInstrumentationEnv(container *discovery.DockerContainer, cfg *config.ProcessConfiguration) map[string]string {
 	env := make(map[string]string)
 
@@ -641,41 +883,253 @@ func (do *DockerOperations) buildInstrumentationEnv(container *discovery.DockerC
 }
 
 // getContainerConfig gets full container configuration
-func (do *DockerOperations) getContainerConfig(containerID string) (map[string]interface{}, error) {
-	cmd := exec.CommandContext(do.ctx, "docker", "inspect", containerID)
-	output, err := cmd.Output()
+func (do *DockerOperations) getContainerConfig(containerID string) (*container.InspectResponse, error) {
+	ctx := context.Background()
+	containerInfo, err := do.cli.ContainerInspect(ctx, containerID)
 	if err != nil {
-		return nil, err
+		log.Fatal(err)
 	}
 
-	var inspectData []map[string]interface{}
-	if err := json.Unmarshal(output, &inspectData); err != nil {
-		return nil, err
-	}
-
-	if len(inspectData) == 0 {
-		return nil, fmt.Errorf("no data returned")
-	}
-
-	return inspectData[0], nil
+	return &containerInfo, nil
 }
 
 // stopContainer stops a running container
 func (do *DockerOperations) stopContainer(containerID string) error {
-	cmd := exec.CommandContext(do.ctx, "docker", "stop", containerID)
-	return cmd.Run()
+	// Docker uses a graceful shutdown process when stopping containers:
+	// 1. First, Docker sends SIGTERM to the main process (PID 1) in the container
+	// 2. The application has 'timeout' seconds to handle SIGTERM and shut down gracefully
+	//    - This allows the app to: close database connections, save state, cleanup resources, etc.
+	// 3. If the container is still running after the timeout expires, Docker sends SIGKILL
+	//    - SIGKILL cannot be caught or ignored - it immediately terminates the process
+	//    - This prevents containers from hanging indefinitely during shutdown
+	//
+	// 30 seconds is a reasonable timeout for most Java applications to:
+	// - Complete current requests
+	// - Close connection pools
+	// - Flush logs and caches
+	// - Perform other cleanup operations
+
+	timeout := 30
+
+	err := do.cli.ContainerStop(
+		do.ctx,
+		containerID,
+		container.StopOptions{
+			Timeout: &timeout,
+		},
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to stop container %s: %w", containerID, err)
+	}
+
+	return nil
 }
 
 // stopContainerByName stops a container by name
 func (do *DockerOperations) stopContainerByName(name string) error {
-	cmd := exec.CommandContext(do.ctx, "docker", "stop", name)
-	return cmd.Run()
+	err := do.stopContainer(name)
+	if err != nil {
+		return fmt.Errorf("failed to stop container %s: %w", name, err)
+	}
+
+	return nil
 }
 
 // removeContainer removes a container
 func (do *DockerOperations) removeContainer(containerID string) error {
-	cmd := exec.CommandContext(do.ctx, "docker", "rm", containerID)
-	return cmd.Run()
+	err := do.cli.ContainerRemove(
+		do.ctx,
+		containerID,
+		container.RemoveOptions{
+			Force: true,
+		},
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to remove container %s: %w", containerID, err)
+	}
+
+	return nil
+}
+
+func (do *DockerOperations) updateContainerEnvironment(
+	containerID string,
+	newEnv []string,
+) error {
+	containerInfo, err := do.cli.ContainerInspect(do.ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("failed to inspect container %s: %w", containerID, err)
+	}
+
+	// For now, we'll still need to recreate the container because Docker doesn't
+	// allow updating environment variables of existing containers
+	// But we'll do it through the API instead of shell commands
+	return do.recreateContainerWithAPI(containerInfo, newEnv)
+}
+
+func (do *DockerOperations) recreateContainerWithAPI(containerInfo container.InspectResponse, newEnv []string) error {
+	// Extract original environment from current env (before instrumentation was added)
+	originalEnv := do.extractOriginalEnvFromCurrent(containerInfo.Config.Env)
+
+	// Derive service name from container metadata
+	serviceName := do.deriveServiceName(containerInfo)
+	// Serialize original config for potential restoration
+	originalConfigBytes, err := json.Marshal(containerInfo.Config)
+	if err != nil {
+		return fmt.Errorf("failed to serialize original config: %w", err)
+	}
+
+	// Create instrumentation labels
+	instrumentationLabels := map[string]string{
+		LabelInstrumented:   "true",
+		LabelInstrumentedAt: time.Now().Format(time.RFC3339),
+		LabelAgentPath:      do.hostAgentPath,
+		LabelServiceName:    serviceName,
+		LabelOriginalEnv:    do.serializeEnv(originalEnv),
+		LabelOriginalConfig: string(originalConfigBytes),
+	}
+
+	// Merge with existing labels (preserve user labels, add instrumentation labels)
+	newLabels := make(map[string]string)
+	if containerInfo.Config.Labels != nil {
+		for k, v := range containerInfo.Config.Labels {
+			newLabels[k] = v
+		}
+	}
+	for k, v := range instrumentationLabels {
+		newLabels[k] = v
+	}
+
+	// Create new container config based on existing one
+	config := &container.Config{
+		Image:        containerInfo.Config.Image,
+		Env:          newEnv, // Updated environment with instrumentation
+		Cmd:          containerInfo.Config.Cmd,
+		Entrypoint:   containerInfo.Config.Entrypoint,
+		WorkingDir:   containerInfo.Config.WorkingDir,
+		User:         containerInfo.Config.User,
+		Labels:       newLabels, // Include instrumentation metadata
+		ExposedPorts: containerInfo.Config.ExposedPorts,
+	}
+
+	// Create host config based on existing one
+	hostConfig := &container.HostConfig{
+		Binds:         containerInfo.HostConfig.Binds,
+		PortBindings:  containerInfo.HostConfig.PortBindings,
+		RestartPolicy: containerInfo.HostConfig.RestartPolicy,
+		NetworkMode:   containerInfo.HostConfig.NetworkMode,
+		VolumeDriver:  containerInfo.HostConfig.VolumeDriver,
+		VolumesFrom:   containerInfo.HostConfig.VolumesFrom,
+		Resources:     containerInfo.HostConfig.Resources,
+	}
+
+	// Add agent volume mount
+	agentMount := fmt.Sprintf("%s:%s:ro", do.hostAgentPath, DefaultContainerAgentPath)
+	hostConfig.Binds = append(hostConfig.Binds, agentMount)
+
+	// Network config
+	networkConfig := &network.NetworkingConfig{
+		EndpointsConfig: containerInfo.NetworkSettings.Networks,
+	}
+
+	containerName := containerInfo.Name
+	if strings.HasPrefix(containerName, "/") {
+		containerName = containerName[1:] // Remove leading slash
+	}
+
+	// Stop and remove old container
+	if err := do.stopContainer(containerInfo.ID); err != nil {
+		return fmt.Errorf("failed to stop old container: %w", err)
+	}
+
+	if err := do.removeContainer(containerInfo.ID); err != nil {
+		return fmt.Errorf("failed to remove old container: %w", err)
+	}
+
+	// Create new container
+	resp, err := do.cli.ContainerCreate(
+		do.ctx,
+		config,
+		hostConfig,
+		networkConfig,
+		nil, // platform
+		containerName,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create new container: %w", err)
+	}
+
+	// Start the new container
+	if err := do.cli.ContainerStart(do.ctx, resp.ID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("failed to start new container: %w", err)
+	}
+
+	fmt.Printf("   ✅ Container recreated with ID: %s\n", resp.ID[:12])
+	return nil
+}
+
+// Helper method to create instrumentation labels
+func (do *DockerOperations) createInstrumentationLabels(containerInfo container.InspectResponse, originalContainer *discovery.DockerContainer) map[string]string {
+	// Extract original environment (filter out instrumentation vars)
+	originalEnv := do.extractOriginalEnvFromCurrent(containerInfo.Config.Env)
+
+	// Serialize original config for restoration
+	originalConfigBytes, _ := json.Marshal(containerInfo.Config)
+
+	// Determine service name
+	serviceName := do.deriveServiceName(containerInfo)
+
+	labels := map[string]string{
+		LabelInstrumented:   "true",
+		LabelInstrumentedAt: time.Now().Format(time.RFC3339),
+		LabelAgentPath:      do.hostAgentPath,
+		LabelOriginalConfig: string(originalConfigBytes),
+		LabelServiceName:    serviceName,
+		LabelOriginalEnv:    do.serializeEnv(originalEnv),
+	}
+
+	// Add compose-specific labels if available
+	if originalContainer != nil && originalContainer.ComposeFile != "" {
+		labels[LabelComposeFile] = originalContainer.ComposeFile
+		labels[LabelComposeService] = originalContainer.ComposeService
+	}
+
+	return labels
+}
+
+func (do *DockerOperations) deriveServiceName(containerInfo container.InspectResponse) string {
+	// Try to get from existing labels first
+	if serviceName := containerInfo.Config.Labels["com.docker.compose.service"]; serviceName != "" {
+		return serviceName
+	}
+
+	// Fall back to container name
+	name := strings.TrimPrefix(containerInfo.Name, "/")
+	return name
+}
+
+func (do *DockerOperations) extractOriginalEnvFromCurrent(currentEnv []string) map[string]string {
+	originalEnv := make(map[string]string)
+	for _, env := range currentEnv {
+		// Skip instrumentation-specific variables
+		if strings.HasPrefix(env, "MW_") ||
+			strings.HasPrefix(env, "OTEL_") ||
+			(strings.HasPrefix(env, "JAVA_TOOL_OPTIONS=") && strings.Contains(env, "javaagent")) {
+			continue
+		}
+
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) == 2 {
+			originalEnv[parts[0]] = parts[1]
+		}
+	}
+	return originalEnv
+}
+
+func (do *DockerOperations) serializeEnv(env map[string]string) string {
+	data, _ := json.Marshal(env)
+	return string(data)
 }
 
 // removeContainerByName removes a container by name
@@ -1080,21 +1534,36 @@ func (do *DockerOperations) ListInstrumentedContainers() ([]ContainerState, erro
 
 // verifyContainerInstrumentation checks if instrumentation actually worked
 func (do *DockerOperations) verifyContainerInstrumentation(containerName string) error {
-	// Check if agent file exists in container
-	cmd := exec.CommandContext(do.ctx, "docker", "exec", containerName, "test", "-f", DefaultContainerAgentPath)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("agent file not found in container")
-	}
-
-	// Check if JAVA_TOOL_OPTIONS is set
-	cmd = exec.CommandContext(do.ctx, "docker", "exec", containerName, "sh", "-c", "echo $JAVA_TOOL_OPTIONS")
-	output, err := cmd.Output()
+	// Get container info
+	containerInfo, err := do.cli.ContainerInspect(do.ctx, containerName)
 	if err != nil {
-		return fmt.Errorf("failed to check JAVA_TOOL_OPTIONS: %w", err)
+		return fmt.Errorf("failed to inspect container: %w", err)
 	}
 
-	if !strings.Contains(string(output), "javaagent") {
+	// Check if JAVA_TOOL_OPTIONS is set correctly in environment
+	javaOptsFound := false
+	for _, env := range containerInfo.Config.Env {
+		if strings.HasPrefix(env, "JAVA_TOOL_OPTIONS=") && strings.Contains(env, "javaagent") {
+			javaOptsFound = true
+			break
+		}
+	}
+
+	if !javaOptsFound {
 		return fmt.Errorf("JAVA_TOOL_OPTIONS not set correctly")
+	}
+
+	// Verify agent mount exists
+	agentMountFound := false
+	for _, mount := range containerInfo.HostConfig.Binds {
+		if strings.Contains(mount, DefaultContainerAgentPath) {
+			agentMountFound = true
+			break
+		}
+	}
+
+	if !agentMountFound {
+		return fmt.Errorf("agent mount not found")
 	}
 
 	return nil

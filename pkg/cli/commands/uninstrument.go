@@ -215,7 +215,10 @@ func (c *UninstrumentDockerCommand) Execute() error {
 		return nil
 	}
 
-	dockerOps := docker.NewDockerOperations(ctx, c.config.DefaultAgentPath)
+	dockerOps, err := docker.NewDockerOperations(ctx, c.config.DefaultAgentPath)
+	if err != nil {
+		return fmt.Errorf("X error in createing docker operations, %v", err.Error())
+	}
 
 	// List instrumented containers
 	instrumented, err := dockerOps.ListInstrumentedContainers()
@@ -276,7 +279,10 @@ func (c *UninstrumentContainerCommand) Execute() error {
 		return fmt.Errorf("❌ This command requires root privileges\n   Run with: sudo mw-injector uninstrument-container %s", c.containerName)
 	}
 
-	dockerOps := docker.NewDockerOperations(ctx, c.config.DefaultAgentPath)
+	dockerOps, err := docker.NewDockerOperations(ctx, c.config.DefaultAgentPath)
+	if err != nil {
+		return fmt.Errorf("X error in createing docker operations, %v", err.Error())
+	}
 
 	fmt.Printf("🔧 Uninstrumenting container: %s\n\n", c.containerName)
 
