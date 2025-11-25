@@ -20,7 +20,7 @@ const (
 	// DefaultAgentPath is the default path to mount the agent in containers
 	DefaultContainerAgentPath = "/opt/middleware/agents/middleware-javaagent.jar"
 
-	DefaultContainerAgentNodePath = "/opt/middleware/agents/node-autoinst.tar"
+	DefaultContainerAgentNodePath = "/opt/middleware/agents/autoinstrumentation"
 
 	// StateFile stores instrumented container information
 	StateFile = "/etc/middleware/docker/instrumented.json"
@@ -43,6 +43,49 @@ func NewDockerOperations(ctx context.Context, hostAgentPath string) *DockerOpera
 }
 
 // InstrumentedState represents the state of instrumented containers
+// type InstrumentedState struct {
+// 	Containers map[string]ContainerState `json:"containers"`
+// 	UpdatedAt  time.Time                 `json:"updated_at"`
+// }
+
+// type ComposeFile struct {
+// 	Version  string             `yaml:"version,omitempty"`
+// 	Services map[string]Service `yaml:"services"`
+// 	Networks map[string]Network `yaml:"networks,omitempty"`
+// 	Volumes  map[string]Volume  `yaml:"volumes,omitempty"`
+// }
+
+// // Service represents a service in docker-compose
+// type Service struct {
+// 	Build       interface{} `yaml:"build,omitempty"`
+// 	Image       string      `yaml:"image,omitempty"`
+// 	Ports       []string    `yaml:"ports,omitempty"`
+// 	Environment []string    `yaml:"environment,omitempty"`
+// 	Volumes     []string    `yaml:"volumes,omitempty"`
+// 	Networks    []string    `yaml:"networks,omitempty"`
+// 	Restart     string      `yaml:"restart,omitempty"`
+// 	DependsOn   []string    `yaml:"depends_on,omitempty"`
+// 	Command     interface{} `yaml:"command,omitempty"`
+// 	Entrypoint  interface{} `yaml:"entrypoint,omitempty"`
+// 	WorkingDir  string      `yaml:"working_dir,omitempty"`
+// 	User        string      `yaml:"user,omitempty"`
+
+// 	// Keep raw YAML for fields we don't explicitly handle
+// 	Extra map[string]interface{} `yaml:",inline"`
+// }
+
+// // Network represents a network definition
+// type Network struct {
+// 	Driver string                 `yaml:"driver,omitempty"`
+// 	Extra  map[string]interface{} `yaml:",inline"`
+// }
+
+// // Volume represents a volume definition
+// type Volume struct {
+// 	Driver string                 `yaml:"driver,omitempty"`
+// 	Extra  map[string]interface{} `yaml:",inline"`
+// }
+
 type InstrumentedState struct {
 	Containers map[string]ContainerState `json:"containers"`
 	UpdatedAt  time.Time                 `json:"updated_at"`
@@ -57,19 +100,19 @@ type ComposeFile struct {
 
 // Service represents a service in docker-compose
 type Service struct {
-	Build       interface{} `yaml:"build,omitempty"`
-	Image       string      `yaml:"image,omitempty"`
-	Ports       []string    `yaml:"ports,omitempty"`
-	Environment []string    `yaml:"environment,omitempty"`
-	Volumes     []string    `yaml:"volumes,omitempty"`
-	Networks    []string    `yaml:"networks,omitempty"`
-	Restart     string      `yaml:"restart,omitempty"`
-	DependsOn   []string    `yaml:"depends_on,omitempty"`
-	Command     interface{} `yaml:"command,omitempty"`
-	Entrypoint  interface{} `yaml:"entrypoint,omitempty"`
-	WorkingDir  string      `yaml:"working_dir,omitempty"`
-	User        string      `yaml:"user,omitempty"`
-
+	Build         interface{} `yaml:"build,omitempty"`
+	Image         string      `yaml:"image,omitempty"`
+	Ports         []string    `yaml:"ports,omitempty"`
+	Environment   interface{} `yaml:"environment,omitempty"` // Can be map[string]string or []string
+	Volumes       []string    `yaml:"volumes,omitempty"`
+	Networks      interface{} `yaml:"networks,omitempty"` // Can be []string or map[string]NetworkConfig
+	Restart       string      `yaml:"restart,omitempty"`
+	DependsOn     interface{} `yaml:"depends_on,omitempty"` // Can be []string or map[string]DependencyConfig
+	Command       interface{} `yaml:"command,omitempty"`
+	Entrypoint    interface{} `yaml:"entrypoint,omitempty"`
+	WorkingDir    string      `yaml:"working_dir,omitempty"`
+	User          string      `yaml:"user,omitempty"`
+	ContainerName string      `yaml:"container_name,omitempty"`
 	// Keep raw YAML for fields we don't explicitly handle
 	Extra map[string]interface{} `yaml:",inline"`
 }
@@ -84,6 +127,15 @@ type Network struct {
 type Volume struct {
 	Driver string                 `yaml:"driver,omitempty"`
 	Extra  map[string]interface{} `yaml:",inline"`
+}
+
+// Helper structs for complex types
+type NetworkConfig struct {
+	Aliases []string `yaml:"aliases,omitempty"`
+}
+
+type DependencyConfig struct {
+	Condition string `yaml:"condition,omitempty"`
 }
 
 // ComposeModifier handles Docker Compose file modifications
@@ -409,7 +461,50 @@ func (do *DockerOperations) instrumentComposeNodeContainer(
 		fmt.Printf("   ✅ Backup created: %s\n", filepath.Base(backupPath))
 	}
 
-	pp.Println("backup path: ", backupPath)
+	// Step 3: Modify compose file
+	if err := do.modifyComposeFile(container, cfg); err != nil { // Baaka jheeki ahiya chhe
+		// Restore backup on failure if we have one
+		if backupPath != "" {
+			modifier.RestoreFromBackup(backupPath)
+		}
+		return fmt.Errorf("failed to modify compose file: %w", err)
+	}
+
+	// Step 4: Validate modified file
+	if err := modifier.ValidateComposeFile(); err != nil {
+		// Restore backup on validation failure
+		if backupPath != "" {
+			modifier.RestoreFromBackup(backupPath)
+		}
+		return fmt.Errorf("modified compose file is invalid: %w", err)
+	}
+
+	// Step 5: Recreate service using docker-compose
+	fmt.Println("   🔄 Recreating service...")
+	if err := do.recreateComposeService(container); err != nil {
+		// Restore backup on failure
+		if backupPath != "" {
+			modifier.RestoreFromBackup(backupPath)
+			fmt.Println("   🔙 Restored original compose file due to recreation failure")
+		}
+		return fmt.Errorf("failed to recreate service: %w", err)
+	}
+
+	// Step 6: Verify instrumentation worked
+	if err := do.verifyContainerInstrumentation(container.ContainerName); err != nil {
+		fmt.Printf("   ⚠️  Warning: Instrumentation verification failed: %v\n", err)
+		fmt.Println("   🔍 Check container logs for issues")
+	} else {
+		fmt.Println("   ✅ Instrumentation verified")
+	}
+
+	// Step 7: Save state
+	if err := do.saveContainerState(container, cfg); err != nil {
+		fmt.Printf("   ⚠️  Warning: Could not save state: %v\n", err)
+	}
+
+	fmt.Printf("   ✅ Container %s instrumented successfully\n", container.ContainerName)
+	return nil
 
 	return fmt.Errorf("naa maar baap, haji baaki chhe")
 }
@@ -548,8 +643,8 @@ func (do *DockerOperations) saveContainerStateWithCommand(container *discovery.D
 		OriginalEnv:       container.Environment,
 		ComposeFile:       container.ComposeFile,
 		ComposeService:    container.ComposeService,
-		RecreationCommand: recreationCommand, // Now properly set!
-		OriginalConfig:    originalConfig,    // Full original config for debugging
+		RecreationCommand: recreationCommand,
+		OriginalConfig:    originalConfig,
 	}
 	state.UpdatedAt = time.Now()
 
@@ -824,12 +919,18 @@ func (do *DockerOperations) modifyComposeFile(container *discovery.DockerContain
 	}
 
 	// Add instrumentation to service
-	if err := modifier.addInstrumentation(&service, cfg, do.hostAgentPath); err != nil {
+	if container.IsNodeJS {
+		pp.Println("Service: ", service)
+		if err := modifier.addNodeInstrumentation(&service, cfg, do.hostAgentPath); err != nil {
+			return fmt.Errorf("failed to add instrumentation: %w", err)
+		}
+	} else if err := modifier.addInstrumentation(&service, cfg, do.hostAgentPath); err != nil {
 		return fmt.Errorf("failed to add instrumentation: %w", err)
 	}
 
 	// Update the service in the compose data
 	composeData.Services[container.ComposeService] = service
+	pp.Println("compose Data, ", composeData)
 
 	// Write the modified compose file
 	if err := modifier.Write(composeData); err != nil {
@@ -888,13 +989,40 @@ func (cm *ComposeModifier) Write(composeFile *ComposeFile) error {
 	return nil
 }
 
-// isServiceInstrumented checks if service already has MW instrumentation
+// GetEnvironmentStrings returns environment variables as KEY=value strings
+func (s *Service) GetEnvironmentStrings() []string {
+	var result []string
+
+	switch env := s.Environment.(type) {
+	case []interface{}:
+		for _, item := range env {
+			if str, ok := item.(string); ok {
+				result = append(result, str)
+			}
+		}
+	case []string:
+		result = env
+	case map[string]interface{}:
+		for k, v := range env {
+			result = append(result, fmt.Sprintf("%s=%v", k, v))
+		}
+	case map[interface{}]interface{}:
+		for k, v := range env {
+			result = append(result, fmt.Sprintf("%v=%v", k, v))
+		}
+	}
+
+	return result
+}
+
+// Then your function becomes simpler:
 func (cm *ComposeModifier) isServiceInstrumented(service *Service) bool {
 	// Check environment variables for existing instrumentation
-	for _, env := range service.Environment {
+	for _, env := range service.GetEnvironmentStrings() {
 		if strings.HasPrefix(env, "MW_API_KEY=") ||
 			strings.HasPrefix(env, "OTEL_SERVICE_NAME=") ||
 			strings.Contains(env, "javaagent") {
+			strings.Contains(env, "NODE_OPTIONS")
 			return true
 		}
 	}
@@ -919,7 +1047,7 @@ func (cm *ComposeModifier) addInstrumentation(service *Service, cfg *config.Proc
 
 	// Remove any existing MW_ or OTEL_ or JAVA_TOOL_OPTIONS environment variables
 	var cleanedEnv []string
-	for _, env := range service.Environment {
+	for _, env := range service.GetEnvironmentStrings() {
 		if !strings.HasPrefix(env, "MW_") &&
 			!strings.HasPrefix(env, "OTEL_") &&
 			!strings.HasPrefix(env, "JAVA_TOOL_OPTIONS=") {
@@ -955,6 +1083,54 @@ func (cm *ComposeModifier) addInstrumentation(service *Service, cfg *config.Proc
 	}
 
 	return nil
+}
+
+func (cm *ComposeModifier) addNodeInstrumentation(
+	service *Service,
+	cfg *config.ProcessConfiguration,
+	hostAgentPath string,
+) error {
+	mwEnv := cfg.ToEnvironmentVariables()
+	pp.Println("MW ENV for node : ", mwEnv)
+	nodeOptions := fmt.Sprintf("NODE_OPTIONS=--import ${PWD}/autoinstrumentation/mw-register.js")
+
+	// Remove any existing MW_ or OTEL_ or JAVA_TOOL_OPTIONS environment variables
+	var cleanedEnv []string
+	for _, env := range service.GetEnvironmentStrings() {
+		if !strings.HasPrefix(env, "MW_") &&
+			!strings.HasPrefix(env, "OTEL_") &&
+			!strings.HasPrefix(env, "NODE_OPTIONS=") {
+			cleanedEnv = append(cleanedEnv, env)
+		}
+	}
+
+	cleanedEnv = append(cleanedEnv, nodeOptions)
+	for key, value := range mwEnv {
+		cleanedEnv = append(cleanedEnv, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	service.Environment = cleanedEnv
+	// Add agent volume mount
+	agentMount := fmt.Sprintf("%s:%s:ro", hostAgentPath, DefaultContainerAgentNodePath)
+
+	// Check if agent volume already exists
+	agentMountExists := false
+	for _, volume := range service.Volumes {
+		if strings.Contains(volume, DefaultContainerAgentPath) {
+			agentMountExists = true
+			break
+		}
+	}
+
+	if !agentMountExists {
+		if service.Volumes == nil {
+			service.Volumes = []string{}
+		}
+		service.Volumes = append(service.Volumes, agentMount)
+	}
+
+	return nil
+
 }
 
 // BackupComposeFile creates a backup of the original compose file
