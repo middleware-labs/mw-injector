@@ -20,7 +20,7 @@ const (
 	// DefaultAgentPath is the default path to mount the agent in containers
 	DefaultContainerAgentPath = "/opt/middleware/agents/middleware-javaagent.jar"
 
-	DefaultContainerAgentNodePath = "/opt/middleware/agents/autoinstrumentation"
+	DefaultContainerAgentNodePath = "/opt/middleware/agents/node-autoinst"
 
 	// StateFile stores instrumented container information
 	StateFile = "/etc/middleware/docker/instrumented.json"
@@ -1105,13 +1105,14 @@ func (cm *ComposeModifier) addNodeInstrumentation(
 	}
 
 	cleanedEnv = append(cleanedEnv, nodeOptions)
+	cleanedEnv = append(cleanedEnv, "NODE_PATH=/app/node_modules")
 	for key, value := range mwEnv {
 		cleanedEnv = append(cleanedEnv, fmt.Sprintf("%s=%s", key, value))
 	}
-
+	pp.Println("CLEADED ENV: ", cleanedEnv)
 	service.Environment = cleanedEnv
 	// Add agent volume mount
-	agentMount := fmt.Sprintf("%s:%s:ro", hostAgentPath, DefaultContainerAgentNodePath)
+	agentMount := fmt.Sprintf("%s:%s:ro", hostAgentPath, "/autoinstrumentation")
 
 	// Check if agent volume already exists
 	agentMountExists := false

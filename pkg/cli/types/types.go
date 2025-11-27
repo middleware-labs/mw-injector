@@ -20,7 +20,7 @@ func NewDefaultConfig() *CommandConfig {
 		DefaultAgentDir:      "/opt/middleware/agents",
 		DefaultAgentName:     "middleware-javaagent-1.8.1.jar",
 		DefaultAgentPath:     "/opt/middleware/agents/middleware-javaagent-1.8.1.jar",
-		DefaultNodeAgentPath: "/opt/middleware/agents/autoinstrumentation",
+		DefaultNodeAgentPath: "/opt/middleware/agents/node-autoinst",
 	}
 }
 
