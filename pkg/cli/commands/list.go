@@ -168,7 +168,6 @@ func (c *ListAllCommand) Execute() error {
 			standaloneProcs = append(standaloneProcs, proc)
 		}
 	}
-
 	// Print header
 	c.printHeader()
 
@@ -460,9 +459,16 @@ func (c *ListAllCommand) printDockerContainer(container *discovery.DockerContain
 			fmt.Printf("  │  Status:        [!] %-44s│\n", truncate("Not instrumented", 44))
 		}
 	} else if container.IsNodeJS {
+
 		// Node.js specific info (for future use when Node.js agents are added)
-		fmt.Printf("  │  Agent:         %-48s│\n", truncate("❌ None", 48))
-		fmt.Printf("  │  Status:        [!] %-44s│\n", truncate("Not instrumented", 44))
+		if container.Instrumented {
+			fmt.Printf("  │  Agent:         %-48s│\n", truncate("✅ MW", 48))
+			fmt.Printf("  │  Status:        [!] %-44s│\n", truncate("Instrumented", 44))
+		} else {
+			fmt.Printf("  │  Agent:         %-48s│\n", truncate("❌ None", 48))
+			fmt.Printf("  │  Status:        [!] %-44s│\n", truncate("Not instrumented", 44))
+		}
+
 	}
 
 	fmt.Printf("  └─────────────────────────────────────────────────────────────────┘\n\n")
