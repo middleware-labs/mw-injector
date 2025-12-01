@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/cli/types"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
 )
@@ -168,7 +169,6 @@ func (c *ListAllCommand) Execute() error {
 			standaloneProcs = append(standaloneProcs, proc)
 		}
 	}
-
 	// Print header
 	c.printHeader()
 
@@ -184,6 +184,9 @@ func (c *ListAllCommand) Execute() error {
 	} else {
 		c.printDockerErrorSection("JAVA", javaDockerErr)
 	}
+
+	pp.Println("NODE CONTAINERS::::")
+	pp.Println(nodeContainers)
 
 	// Print Node.js Docker section
 	if nodeDiscoverErr == nil {
@@ -460,9 +463,16 @@ func (c *ListAllCommand) printDockerContainer(container *discovery.DockerContain
 			fmt.Printf("  │  Status:        [!] %-44s│\n", truncate("Not instrumented", 44))
 		}
 	} else if container.IsNodeJS {
+
 		// Node.js specific info (for future use when Node.js agents are added)
-		fmt.Printf("  │  Agent:         %-48s│\n", truncate("❌ None", 48))
-		fmt.Printf("  │  Status:        [!] %-44s│\n", truncate("Not instrumented", 44))
+		if container.Instrumented {
+			fmt.Printf("  │  Agent:         %-48s│\n", truncate("✅ MW", 48))
+			fmt.Printf("  │  Status:        [!] %-44s│\n", truncate("Instrumented", 44))
+		} else {
+			fmt.Printf("  │  Agent:         %-48s│\n", truncate("❌ None", 48))
+			fmt.Printf("  │  Status:        [!] %-44s│\n", truncate("Not instrumented", 44))
+		}
+
 	}
 
 	fmt.Printf("  └─────────────────────────────────────────────────────────────────┘\n\n")
