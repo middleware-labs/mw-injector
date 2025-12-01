@@ -186,7 +186,6 @@ func (do *DockerOperations) InstrumentContainer(containerName string, cfg *confi
 		if container.IsJava {
 			return do.instrumentComposeContainer(container, cfg)
 		} else if container.IsNodeJS {
-			pp.Println("Haa mar baap")
 			return do.instrumentComposeNodeContainer(container, cfg)
 		}
 	}
@@ -506,7 +505,6 @@ func (do *DockerOperations) instrumentComposeNodeContainer(
 	fmt.Printf("   ✅ Container %s instrumented successfully\n", container.ContainerName)
 	return nil
 
-	return fmt.Errorf("naa maar baap, haji baaki chhe")
 }
 
 // buildOriginalDockerRunCommand creates the original docker run command before instrumentation
@@ -1091,8 +1089,10 @@ func (cm *ComposeModifier) addNodeInstrumentation(
 	cfg *config.ProcessConfiguration,
 	hostAgentPath string,
 ) error {
+	cfg.MWServiceName = ""
+	pp.Println("----------------------------------------------------------")
+	pp.Println("cfg: OTEL SERVICE NAME: ", cfg.OtelServiceName)
 	mwEnv := cfg.ToEnvironmentVariables()
-	pp.Println("MW ENV for node : ", mwEnv)
 	nodeOptions := fmt.Sprintf("NODE_OPTIONS=--import ${PWD}/autoinstrumentation/mw-register.js")
 
 	// Remove any existing MW_ or OTEL_ or JAVA_TOOL_OPTIONS environment variables
