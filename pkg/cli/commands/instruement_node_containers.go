@@ -122,6 +122,7 @@ func (c *ConfigNodeContainerCommand) Execute() error {
 		cfg.MWAPIKey = apiKey
 		cfg.MWTarget = target
 		cfg.MWAgentService = "" // Reserved hack
+		cfg.OtelServiceName = container.GetServiceName()
 		cfg.NodeAgentPath = docker.DefaultContainerAgentNodePath
 		pp.Println("cfg: ", cfg)
 

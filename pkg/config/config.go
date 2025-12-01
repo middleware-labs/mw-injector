@@ -125,6 +125,10 @@ func (c *ProcessConfiguration) ToEnvironmentVariables() map[string]string {
 		env["MW_AGENT_SERVICE"] = c.MWAgentService
 	}
 
+	if c.OtelServiceName != "" {
+		env["OTEL_SERVICE_NAME"] = c.OtelServiceName
+	}
+
 	if c.MWPropagators != "" {
 		env["MW_PROPAGATORS"] = c.MWPropagators
 	}
