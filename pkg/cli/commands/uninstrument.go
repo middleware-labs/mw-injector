@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/cli/types"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
 	"github.com/middleware-labs/java-injector/pkg/docker"
@@ -219,6 +220,7 @@ func (c *UninstrumentDockerCommand) Execute() error {
 
 	// List instrumented containers
 	instrumented, err := dockerOps.ListInstrumentedContainers()
+	pp.Println("Instrumented Containers: ", instrumented)
 	if err != nil {
 		return fmt.Errorf("❌ Error listing instrumented containers: %v", err)
 	}

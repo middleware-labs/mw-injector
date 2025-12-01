@@ -49,6 +49,7 @@ type ProcessConfiguration struct {
 	// Java agent path
 	JavaAgentPath string `json:"java_agent_path"`
 
+	NodeAgentPath string `json:"node_agent_path"`
 	// Container settings
 	IsContainer   bool   `json:"is_container"`
 	ContainerType string `json:"container_type"` // docker, kubernetes
@@ -104,7 +105,10 @@ func (c *ProcessConfiguration) ToEnvironmentVariables() map[string]string {
 	if c.MWTarget != "" {
 		env["MW_TARGET"] = c.MWTarget
 	}
-	env["MW_SERVICE_NAME"] = c.MWServiceName
+
+	if c.MWServiceName != "" {
+		env["MW_SERVICE_NAME"] = c.MWServiceName
+	}
 
 	// Feature toggles
 	env["MW_APM_COLLECT_PROFILING"] = boolToString(c.MWAPMCollectProfiling)
@@ -120,6 +124,7 @@ func (c *ProcessConfiguration) ToEnvironmentVariables() map[string]string {
 	if c.MWAgentService != "" {
 		env["MW_AGENT_SERVICE"] = c.MWAgentService
 	}
+
 	if c.MWPropagators != "" {
 		env["MW_PROPAGATORS"] = c.MWPropagators
 	}

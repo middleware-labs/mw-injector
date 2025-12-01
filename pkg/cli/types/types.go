@@ -8,17 +8,19 @@ type CommandHandler interface {
 
 // CommandConfig holds configuration passed to all commands
 type CommandConfig struct {
-	DefaultAgentDir  string
-	DefaultAgentName string
-	DefaultAgentPath string
+	DefaultAgentDir      string
+	DefaultAgentName     string
+	DefaultAgentPath     string
+	DefaultNodeAgentPath string
 }
 
 // NewDefaultConfig returns default configuration values
 func NewDefaultConfig() *CommandConfig {
 	return &CommandConfig{
-		DefaultAgentDir:  "/opt/middleware/agents",
-		DefaultAgentName: "middleware-javaagent-1.8.1.jar",
-		DefaultAgentPath: "/opt/middleware/agents/middleware-javaagent-1.8.1.jar",
+		DefaultAgentDir:      "/opt/middleware/agents",
+		DefaultAgentName:     "middleware-javaagent-1.8.1.jar",
+		DefaultAgentPath:     "/opt/middleware/agents/middleware-javaagent-1.8.1.jar",
+		DefaultNodeAgentPath: "/opt/middleware/agents/node-autoinst",
 	}
 }
 

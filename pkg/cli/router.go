@@ -92,6 +92,9 @@ func (r *Router) Run(args []string) error {
 	case "instrument-docker-config":
 		return r.executeOptionalArgCommand(commandName, commandArgs)
 
+	case "instrument-node-containers":
+		return r.executeOptionalArgCommand(commandName, commandArgs)
+
 	default:
 		PrintUsage()
 		return fmt.Errorf("unknown command: %s", commandName)
@@ -148,6 +151,9 @@ func (r *Router) executeOptionalArgCommand(commandName string, args []string) er
 		return cmd.Execute()
 	case "instrument-docker-config":
 		cmd := commands.NewConfigInstrumentDockerCommand(r.config, configPath)
+		return cmd.Execute()
+	case "instrument-node-containers":
+		cmd := commands.NewConfigNodeContainerCommand(r.config, configPath)
 		return cmd.Execute()
 	default:
 		return fmt.Errorf("unknown optional arg command: %s", commandName)

@@ -45,7 +45,7 @@ type JavaProcess struct {
 	CPUPercent    float64 `json:"process.cpu.percent"`
 	Status        string  `json:"process.status"`
 
-	ContainerInfo *ContainerInfo `json:container_info, omitempty`
+	ContainerInfo *ContainerInfo `json:"container_info,omitempty"`
 }
 
 // 2. Add these methods to JavaProcess (can go at the end of discovery.go)
