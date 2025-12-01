@@ -186,7 +186,6 @@ func (do *DockerOperations) InstrumentContainer(containerName string, cfg *confi
 		if container.IsJava {
 			return do.instrumentComposeContainer(container, cfg)
 		} else if container.IsNodeJS {
-			pp.Println("Haa mar baap")
 			return do.instrumentComposeNodeContainer(container, cfg)
 		}
 	}
