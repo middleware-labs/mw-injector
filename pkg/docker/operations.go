@@ -886,6 +886,7 @@ func (do *DockerOperations) buildDockerRunCommand(config map[string]interface{},
 
 // runContainer runs a docker run command
 func (do *DockerOperations) runContainer(command string) error {
+	pp.Println("Running the docker command: ", command)
 	cmd := exec.CommandContext(do.ctx, "sh", "-c", command)
 	return cmd.Run()
 }
