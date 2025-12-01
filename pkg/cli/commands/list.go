@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/cli/types"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
 )
@@ -184,9 +183,6 @@ func (c *ListAllCommand) Execute() error {
 	} else {
 		c.printDockerErrorSection("JAVA", javaDockerErr)
 	}
-
-	pp.Println("NODE CONTAINERS::::")
-	pp.Println(nodeContainers)
 
 	// Print Node.js Docker section
 	if nodeDiscoverErr == nil {
