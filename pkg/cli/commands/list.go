@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/cli/types"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
 )
@@ -148,6 +149,13 @@ func (c *ListAllCommand) Execute() error {
 	if err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
+
+	nodeProcs, err := discovery.FindAllNodeProcesses(ctx)
+	if err != nil {
+		return fmt.Errorf("error: %v", err)
+	}
+
+	pp.Println(nodeProcs)
 
 	// Get Docker containers
 	dockerDiscoverer := discovery.NewDockerDiscoverer(ctx)

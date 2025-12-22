@@ -215,6 +215,17 @@ func FindAllJavaProcesses(ctx context.Context) ([]JavaProcess, error) {
 	return discoverer.DiscoverWithOptions(ctx, opts)
 }
 
+func FindAllNodeProcesses(ctx context.Context) ([]NodeProcess, error) {
+	opts := DefaultDiscoveryOptions()
+	opts.ExcludeContainers = false
+	opts.IncludeContainerInfo = true
+
+	discoverer := NewDiscoverer(ctx, opts)
+	defer discoverer.Close()
+
+	return discoverer.DiscoverNodeWithOptions(ctx, opts)
+}
+
 // FindCurrentUserJavaProcesses discovers Java processes for the current user only
 func FindCurrentUserJavaProcesses(ctx context.Context) ([]JavaProcess, error) {
 	opts := DefaultDiscoveryOptions()
