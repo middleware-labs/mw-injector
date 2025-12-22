@@ -11,8 +11,6 @@ import (
 	"os"
 	"runtime"
 	"time"
-
-	"github.com/k0kubun/pp"
 )
 
 const apiPathForAgentSetting = "api/v1/agent/public/setting/"
@@ -112,8 +110,6 @@ func GetAgentReportValue() (AgentReportValue, error) {
 			AutoInstrumentationSettings: settings,
 		},
 	}
-
-	pp.Println(reportValue)
 
 	return reportValue, nil
 }
@@ -222,7 +218,6 @@ func ReportStatus(
 	version string,
 	infraPlatform string,
 ) error {
-	pp.Println("WE be snitching from injector baby")
 	u, err := url.Parse(urlForConfigCheck)
 	if err != nil {
 		return err
@@ -235,7 +230,6 @@ func ReportStatus(
 		return fmt.Errorf("failed to generate agent report value: %w", err)
 	}
 
-	pp.Println(rawReportValue)
 	rawConfigBytes, err := json.Marshal(rawReportValue)
 	if err != nil {
 		return fmt.Errorf("failed to marshal raw config payload: %w", err)
