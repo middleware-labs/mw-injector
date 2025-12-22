@@ -215,7 +215,7 @@ func detectDeploymentType(proc *JavaProcess) string {
 	return "standalone"
 }
 
-func Reportlol(
+func ReportStatus(
 	hostname string,
 	apiKey string,
 	urlForConfigCheck string,
@@ -275,17 +275,8 @@ func Reportlol(
 
 	// 5. Check Status Code
 	if resp.StatusCode != http.StatusOK {
-		// Read the error body for better debugging if available
-		// bodyBytes, _ := io.ReadAll(resp.Body)
-		// c.logger.Error("agent status POST API returned non-200 status code",
-		// 	zap.Int("status", resp.StatusCode),
-		// 	zap.ByteString("body", bodyBytes),
-		// 	zap.String("url", finalURL))
-
 		return fmt.Errorf("agent status POST API returned non-200 status code: %d", resp.StatusCode)
 	}
-
-	// c.logger.Debug("Successfully reported agent status", zap.String("url", finalURL))
 
 	return nil
 }
