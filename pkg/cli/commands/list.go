@@ -594,14 +594,3 @@ func (c *ListAllCommand) fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
-
-// truncate truncates a string to a maximum length
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return s[:maxLen]
-	}
-	return s[:maxLen-3] + "..."
-}

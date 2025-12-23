@@ -11,6 +11,8 @@ import (
 	"os"
 	"runtime"
 	"time"
+
+	"github.com/k0kubun/pp"
 )
 
 const apiPathForAgentSetting = "api/v1/agent/public/setting/"
@@ -72,6 +74,8 @@ func GetAgentReportValue() (AgentReportValue, error) {
 		// Decide if this should be a fatal error or just logged (assuming logged for now)
 	}
 
+	nodeProcs, err := FindAllNodeProcesses(ctx)
+
 	// b) Docker Containers (Java/Node)
 	dockerDiscoverer := NewDockerDiscoverer(ctx)
 	javaContainers, _ := dockerDiscoverer.DiscoverJavaContainers() // Error handling omitted for brevity
@@ -103,6 +107,12 @@ func GetAgentReportValue() (AgentReportValue, error) {
 		settings[setting.Key] = setting
 	}
 
+	for _, proc := range nodeProcs {
+		setting := convertNodeProcessToServiceSetting(proc)
+		pp.Println("Found node setting: ", setting)
+		settings[setting.Key] = setting
+	}
+
 	reportValue := AgentReportValue{
 		osKey: OSConfig{
 			AgentRestartStatus:          false,
@@ -127,6 +137,23 @@ func convertJavaContainerToServiceSetting(container DockerContainer) ServiceSett
 		ServiceType: "docker",
 		Language:    "java",
 		Key:         key,
+	}
+}
+
+func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
+
+	key := fmt.Sprintf("host-%d", proc.ProcessPID)
+	return ServiceSetting{
+		PID:            0,
+		ServiceName:    proc.ServiceName,
+		Status:         proc.Status,
+		Enabled:        true,
+		ServiceType:    "system",
+		Language:       "node",
+		RuntimeVersion: proc.ProcessRuntimeVersion,
+		AgentPath:      proc.NodeAgentPath,
+		Instrumented:   proc.HasNodeAgent,
+		Key:            key,
 	}
 }
 
