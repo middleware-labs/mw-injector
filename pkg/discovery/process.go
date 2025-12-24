@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/k0kubun/pp"
 	"github.com/shirou/gopsutil/v4/process"
 )
 
@@ -253,6 +254,7 @@ func (d *discoverer) processNodeWithWorkerPool(ctx context.Context, processes []
 	if len(processes) == 0 {
 		return []NodeProcess{}, nil
 	}
+	pp.Println(opts)
 
 	// Create channels for work distribution
 	jobs := make(chan *process.Process, len(processes))
@@ -315,7 +317,7 @@ func (d *discoverer) processNodeWithWorkerPool(ctx context.Context, processes []
 	if len(errors) > 0 && !opts.SkipPermissionErrors {
 		return nodeProcesses, fmt.Errorf("encountered %d errors during Node.js discovery: %v", len(errors), errors[0])
 	}
-
+	pp.Println("Post PROCESESSING: ", nodeProcesses)
 	return nodeProcesses, nil
 }
 
@@ -503,6 +505,7 @@ func (d *discoverer) extractPackageInfo(nodeProc *NodeProcess, workingDir string
 	if _, err := os.Stat(packageJsonPath); err == nil {
 		// TODO: Parse package.json and extract name, version, dependencies
 		// This would require json.Unmarshal(data, &PackageInfo{})
+		pp.Println("Does not exist, package")
 		nodeProc.PackageName = "unknown"    // Placeholder
 		nodeProc.PackageVersion = "unknown" // Placeholder
 	}
@@ -995,9 +998,9 @@ func (d *discoverer) addMetrics(proc *process.Process, javaProc *JavaProcess) {
 	}
 
 	// Get CPU percentage
-	if cpuPercent, err := proc.CPUPercent(); err == nil {
-		javaProc.CPUPercent = cpuPercent
-	}
+	// if cpuPercent, err := proc.CPUPercent(); err == nil {
+	// 	javaProc.CPUPercent = cpuPercent
+	// }
 }
 
 // passesFilter checks if a process passes the given filter criteria

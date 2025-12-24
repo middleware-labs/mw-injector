@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // ContainerInfo holds information about a process running in a container
@@ -22,6 +23,7 @@ type ContainerInfo struct {
 type ContainerDetector struct {
 	// Cache for container lookups to avoid repeated Docker calls
 	containerCache map[string]*ContainerInfo
+	cacheMu        sync.RWMutex
 }
 
 // NewContainerDetector creates a new container detector
@@ -35,38 +37,42 @@ func NewContainerDetector() *ContainerDetector {
 func (cd *ContainerDetector) IsProcessInContainer(pid int32) (*ContainerInfo, error) {
 	pidStr := strconv.Itoa(int(pid))
 
-	// Check cache first
+	// 1. Read Lock: Check cache first safely
+	cd.cacheMu.RLock()
 	if info, exists := cd.containerCache[pidStr]; exists {
+		cd.cacheMu.RUnlock()
 		return info, nil
 	}
+	cd.cacheMu.RUnlock()
 
-	// Method 1: Check cgroup (most reliable)
-	if info, err := cd.checkCgroup(pid); err == nil && info.IsContainer {
-		cd.containerCache[pidStr] = info
-		return info, nil
+	// Perform detection (outside of lock to keep it fast)
+	var info *ContainerInfo
+	var err error
+
+	// Try detection methods...
+	for {
+		if info, err = cd.checkCgroup(pid); err == nil && info.IsContainer {
+			break
+		}
+		if info, err = cd.checkMountNamespace(pid); err == nil && info.IsContainer {
+			break
+		}
+		if info, err = cd.checkEnvironment(pid); err == nil && info.IsContainer {
+			break
+		}
+		if info, err = cd.checkParentProcess(pid); err == nil && info.IsContainer {
+			break
+		}
+		// Default: not in a container
+		info = &ContainerInfo{IsContainer: false}
+		break
 	}
 
-	// Method 2: Check mount namespace
-	if info, err := cd.checkMountNamespace(pid); err == nil && info.IsContainer {
-		cd.containerCache[pidStr] = info
-		return info, nil
-	}
-
-	// Method 3: Check process environment for container indicators
-	if info, err := cd.checkEnvironment(pid); err == nil && info.IsContainer {
-		cd.containerCache[pidStr] = info
-		return info, nil
-	}
-
-	// Method 4: Check if parent process is a container runtime
-	if info, err := cd.checkParentProcess(pid); err == nil && info.IsContainer {
-		cd.containerCache[pidStr] = info
-		return info, nil
-	}
-
-	// Not in a container
-	info := &ContainerInfo{IsContainer: false}
+	// 2. Write Lock: Update the cache safely
+	cd.cacheMu.Lock()
 	cd.containerCache[pidStr] = info
+	cd.cacheMu.Unlock()
+
 	return info, nil
 }
 
@@ -394,5 +400,7 @@ func (cd *ContainerDetector) getPodmanContainerName(containerID string) string {
 
 // ClearCache clears the internal container detection cache
 func (cd *ContainerDetector) ClearCache() {
+	cd.cacheMu.Lock()
+	defer cd.cacheMu.Unlock()
 	cd.containerCache = make(map[string]*ContainerInfo)
 }

@@ -108,6 +108,8 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	}
 
 	for _, proc := range nodeProcs {
+		pp.Println("---------------------------------------------------------")
+		pp.Println(proc)
 		setting := convertNodeProcessToServiceSetting(proc)
 		pp.Println("Found node setting: ", setting)
 		settings[setting.Key] = setting
