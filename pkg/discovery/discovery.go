@@ -4,6 +4,7 @@ package discovery
 
 import (
 	"context"
+	"sync"
 	"time"
 )
 
@@ -198,6 +199,7 @@ func NewDiscovererWithOptions(ctx context.Context, opts DiscoveryOptions) *disco
 		ctx:               ctx,
 		opts:              opts,
 		containerDetector: NewContainerDetector(),
+		userCache:         sync.Map{},
 	}
 }
 

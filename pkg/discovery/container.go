@@ -33,44 +33,29 @@ func NewContainerDetector() *ContainerDetector {
 	}
 }
 
-// IsProcessInContainer checks if a given PID is running inside a container
 func (cd *ContainerDetector) IsProcessInContainer(pid int32) (*ContainerInfo, error) {
-	pidStr := strconv.Itoa(int(pid))
+	// 1. QUICK CHECK: Every process has a Cgroup. Check that first.
+	// This is a simple file read, much cheaper than Namespace or Exec checks.
+	info, err := cd.checkCgroup(pid)
+	if err != nil || !info.IsContainer {
+		return info, err
+	}
 
-	// 1. Read Lock: Check cache first safely
-	cd.cacheMu.RLock()
-	if info, exists := cd.containerCache[pidStr]; exists {
+	// 2. SMART CACHE: Use ContainerID as the key, not the PID!
+	if info.ContainerID != "" {
+		cd.cacheMu.RLock()
+		if cached, exists := cd.containerCache[info.ContainerID]; exists {
+			cd.cacheMu.RUnlock()
+			return cached, nil
+		}
 		cd.cacheMu.RUnlock()
-		return info, nil
-	}
-	cd.cacheMu.RUnlock()
-
-	// Perform detection (outside of lock to keep it fast)
-	var info *ContainerInfo
-	var err error
-
-	// Try detection methods...
-	for {
-		if info, err = cd.checkCgroup(pid); err == nil && info.IsContainer {
-			break
-		}
-		if info, err = cd.checkMountNamespace(pid); err == nil && info.IsContainer {
-			break
-		}
-		if info, err = cd.checkEnvironment(pid); err == nil && info.IsContainer {
-			break
-		}
-		if info, err = cd.checkParentProcess(pid); err == nil && info.IsContainer {
-			break
-		}
-		// Default: not in a container
-		info = &ContainerInfo{IsContainer: false}
-		break
 	}
 
-	// 2. Write Lock: Update the cache safely
+	// 3. DEFER NAME LOOKUP: Don't call 'docker inspect' here.
+	// Wait until you are 100% sure this is a Java/Node process you want to keep.
+
 	cd.cacheMu.Lock()
-	cd.containerCache[pidStr] = info
+	cd.containerCache[info.ContainerID] = info
 	cd.cacheMu.Unlock()
 
 	return info, nil

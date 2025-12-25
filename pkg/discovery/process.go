@@ -15,11 +15,24 @@ import (
 	"github.com/shirou/gopsutil/v4/process"
 )
 
+type DiscoveryCandidate struct {
+	Process       *process.Process
+	Exe           string
+	Cmdline       string
+	Args          []string
+	PPid          int32
+	Owner         string
+	IsJavaProcess bool
+	CreateTime    int64
+	Status        []string
+}
+
 // discoverer implements the Discoverer interface
 type discoverer struct {
 	ctx               context.Context
 	opts              DiscoveryOptions
 	containerDetector *ContainerDetector
+	userCache         sync.Map
 }
 
 // DiscoverJavaProcesses finds all Java processes with default options
@@ -43,9 +56,11 @@ func (d *discoverer) DiscoverWithOptions(ctx context.Context, opts DiscoveryOpti
 	}
 
 	// Filter for Java processes first to reduce workload
-	javaProcesses := d.filterJavaProcesses(allProcesses)
+	// javaDiscoverCandidates := d.filterJavaProcesses(allProcesses)
+
+	// pp.Println(javaDiscoverCandidates)
 	// Process concurrently with worker pool
-	return d.processWithWorkerPool(ctx, javaProcesses, opts)
+	return d.processWithWorkerPool(ctx, allProcesses, opts)
 }
 
 func (d *discoverer) DiscoverNodeWithOptions(
@@ -74,12 +89,13 @@ func (d *discoverer) RefreshProcess(ctx context.Context, pid int32) (*JavaProces
 		return nil, fmt.Errorf("process %d not found: %w", pid, err)
 	}
 
+	discoveryCandidate := d.getJavaDiscoveryCandidateForProcesss(proc)
 	// Check if it's a Java process
-	if !d.isJavaProcess(proc) {
+	if !discoveryCandidate.IsJavaProcess {
 		return nil, fmt.Errorf("process %d is not a Java process", pid)
 	}
 
-	javaProc, err := d.processOne(ctx, proc, d.opts)
+	javaProc, err := d.processOne(ctx, &discoveryCandidate, d.opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to process PID %d: %w", pid, err)
 	}
@@ -94,12 +110,15 @@ func (d *discoverer) Close() error {
 }
 
 // filterJavaProcesses quickly filters processes to find Java processes
-func (d *discoverer) filterJavaProcesses(processes []*process.Process) []*process.Process {
-	var javaProcesses []*process.Process
+func (d *discoverer) filterJavaProcesses(processes []*process.Process) []*DiscoveryCandidate {
+	// var javaProcesses []*process.Process
+	var javaProcesses []*DiscoveryCandidate
 
 	for _, proc := range processes {
-		if d.isJavaProcess(proc) {
-			javaProcesses = append(javaProcesses, proc)
+		if discoveryCandidate := d.getJavaDiscoveryCandidateForProcesss(proc); discoveryCandidate.IsJavaProcess {
+			// pp.Println("Lol here with, ", proc)
+			// pp.Println("And the candidate,  ", discoveryCandidate)
+			javaProcesses = append(javaProcesses, &discoveryCandidate)
 		}
 	}
 
@@ -155,25 +174,57 @@ func (d *discoverer) isNodeProcess(proc *process.Process) bool {
 }
 
 // isJavaProcess checks if a process is a Java process
-func (d *discoverer) isJavaProcess(proc *process.Process) bool {
+func (d *discoverer) getJavaDiscoveryCandidateForProcesss(
+	proc *process.Process,
+) DiscoveryCandidate {
 	// Try to get the executable name
+	var discoveryCandidate DiscoveryCandidate
+
 	exe, err := proc.Exe()
 	if err != nil {
 		// If we can't get exe, try cmdline as fallback
 		cmdline, err := proc.Cmdline()
+		discoveryCandidate.Cmdline = cmdline
 		if err != nil {
-			return false
+			discoveryCandidate.IsJavaProcess = false
 		}
-		return strings.Contains(strings.ToLower(cmdline), "java")
+		discoveryCandidate.IsJavaProcess = strings.Contains(strings.ToLower(cmdline), "java")
 	}
-
+	discoveryCandidate.Process = proc
 	// Check if executable contains "java"
 	exeName := strings.ToLower(strings.TrimSpace(exe))
-	return strings.Contains(exeName, "java") || strings.HasSuffix(exeName, "/java")
+	discoveryCandidate.IsJavaProcess = strings.Contains(exeName, "java") || strings.HasSuffix(exeName, "/java")
+	discoveryCandidate.Exe = exeName
+
+	discoveryCandidate.PPid, err = proc.Ppid()
+	if err != nil {
+		discoveryCandidate.PPid = -1
+	}
+
+	discoveryCandidate.Owner, err = d.getProcessOwner(proc)
+	if err != nil {
+		discoveryCandidate.Owner = "unknown"
+	}
+
+	discoveryCandidate.CreateTime, err = proc.CreateTime()
+	if err != nil {
+		discoveryCandidate.CreateTime = 0
+	}
+
+	discoveryCandidate.Status, err = proc.Status()
+	if err != nil {
+		discoveryCandidate.Status = []string{"unknown"}
+	}
+
+	return discoveryCandidate
 }
 
 // processWithWorkerPool processes Java processes concurrently
-func (d *discoverer) processWithWorkerPool(ctx context.Context, processes []*process.Process, opts DiscoveryOptions) ([]JavaProcess, error) {
+func (d *discoverer) processWithWorkerPool(
+	ctx context.Context,
+	processes []*process.Process,
+	opts DiscoveryOptions,
+) ([]JavaProcess, error) {
 	if len(processes) == 0 {
 		return []JavaProcess{}, nil
 	}
@@ -201,6 +252,7 @@ func (d *discoverer) processWithWorkerPool(ctx context.Context, processes []*pro
 	go func() {
 		defer close(jobs)
 		for _, proc := range processes {
+			// pp.Println(proc)
 			select {
 			case jobs <- proc:
 			case <-ctx.Done():
@@ -254,7 +306,7 @@ func (d *discoverer) processNodeWithWorkerPool(ctx context.Context, processes []
 	if len(processes) == 0 {
 		return []NodeProcess{}, nil
 	}
-	pp.Println(opts)
+	// pp.Println(opts)
 
 	// Create channels for work distribution
 	jobs := make(chan *process.Process, len(processes))
@@ -317,7 +369,7 @@ func (d *discoverer) processNodeWithWorkerPool(ctx context.Context, processes []
 	if len(errors) > 0 && !opts.SkipPermissionErrors {
 		return nodeProcesses, fmt.Errorf("encountered %d errors during Node.js discovery: %v", len(errors), errors[0])
 	}
-	pp.Println("Post PROCESESSING: ", nodeProcesses)
+	// pp.Println("Post PROCESESSING: ", nodeProcesses)
 	return nodeProcesses, nil
 }
 
@@ -809,7 +861,13 @@ type processResult struct {
 }
 
 // worker processes individual processes
-func (d *discoverer) worker(ctx context.Context, jobs <-chan *process.Process, results chan<- processResult, opts DiscoveryOptions, wg *sync.WaitGroup) {
+func (d *discoverer) worker(
+	ctx context.Context,
+	jobs <-chan *process.Process,
+	results chan<- processResult,
+	opts DiscoveryOptions,
+	wg *sync.WaitGroup,
+) {
 	defer wg.Done()
 
 	for proc := range jobs {
@@ -820,68 +878,37 @@ func (d *discoverer) worker(ctx context.Context, jobs <-chan *process.Process, r
 		default:
 		}
 
-		javaProc, err := d.processOne(ctx, proc, opts)
+		candidate := d.getJavaDiscoveryCandidateForProcesss(proc)
+		if !candidate.IsJavaProcess {
+			continue
+		}
+		javaProc, err := d.processOne(ctx, &candidate, opts)
+		pp.Println("Java Proc: ", javaProc)
 		results <- processResult{javaProc, err}
 	}
 }
 
 // processOne processes a single Java process
-func (d *discoverer) processOne(ctx context.Context, proc *process.Process, opts DiscoveryOptions) (*JavaProcess, error) {
+func (d *discoverer) processOne(ctx context.Context, proc *DiscoveryCandidate, opts DiscoveryOptions) (*JavaProcess, error) {
 	// Get basic process information
-	pid := proc.Pid
-
-	cmdline, err := proc.Cmdline()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get cmdline for PID %d: %w", pid, err)
+	if !proc.IsJavaProcess {
+		return nil, nil
 	}
-
-	exe, err := proc.Exe()
-	if err != nil {
-		// Use fallback if exe is not accessible
-		exe = "java"
-	}
-
-	// Get parent PID
-	parentPID, err := proc.Ppid()
-	if err != nil {
-		parentPID = 0
-	}
-
-	// Get process owner
-	owner, err := d.getProcessOwner(proc)
-	if err != nil {
-		owner = "unknown"
-	}
-
-	// Get process create time
-	createTime, err := proc.CreateTime()
-	if err != nil {
-		createTime = 0
-	}
-	createTimeStamp := time.Unix(createTime/1000, 0)
-
-	// Get process status
-	status, err := proc.Status()
-	if err != nil {
-		status = []string{"unknown"}
-	}
-	statusStr := strings.Join(status, ",")
-
-	// Parse command line arguments
-	cmdArgs := d.parseCommandLine(cmdline)
+	cmdArgs := d.parseCommandLine(proc.Cmdline)
 
 	// Initialize the Java process structure
 	javaProc := &JavaProcess{
-		ProcessPID:            pid,
-		ProcessParentPID:      parentPID,
-		ProcessExecutableName: d.getExecutableName(exe),
-		ProcessExecutablePath: exe,
-		ProcessCommand:        cmdline,
-		ProcessCommandLine:    cmdline,
-		ProcessCommandArgs:    cmdArgs,
-		ProcessOwner:          owner,
-		ProcessCreateTime:     createTimeStamp,
-		Status:                statusStr,
+		ProcessPID:       proc.Process.Pid,
+		ProcessParentPID: proc.PPid,
+
+		ProcessExecutableName: d.getExecutableName(proc.Exe),
+		ProcessExecutablePath: proc.Exe,
+		ProcessCommand:        proc.Cmdline,
+		ProcessCommandLine:    proc.Cmdline,
+		ProcessCommandArgs:    d.parseCommandLine(proc.Cmdline),
+		ProcessOwner:          proc.Owner,
+		ProcessCreateTime:     time.Unix(proc.CreateTime/1000, 0),
+		Status:                strings.Join(proc.Status, ","),
 
 		// Java runtime information
 		ProcessRuntimeName:        "java",
@@ -939,13 +966,14 @@ func (d *discoverer) processOne(ctx context.Context, proc *process.Process, opts
 
 	// Get metrics if requested
 	if opts.IncludeMetrics {
-		d.addMetrics(proc, javaProc)
+		d.addMetrics(proc.Process, javaProc)
 	}
 
 	return javaProc, nil
 }
 
 // getProcessOwner gets the owner of the process
+// 2. Update getProcessOwner to use the cache
 func (d *discoverer) getProcessOwner(proc *process.Process) (string, error) {
 	uids, err := proc.Uids()
 	if err != nil || len(uids) == 0 {
@@ -953,11 +981,18 @@ func (d *discoverer) getProcessOwner(proc *process.Process) (string, error) {
 	}
 
 	uid := fmt.Sprintf("%d", uids[0])
-	u, err := user.LookupId(uid)
-	if err != nil {
-		return uid, nil // Return UID if we can't resolve username
+
+	// Check cache first to avoid syscalls/network lookups
+	if cachedName, ok := d.userCache.Load(uid); ok {
+		return cachedName.(string), nil
 	}
 
+	u, err := user.LookupId(uid)
+	if err != nil {
+		return uid, nil
+	}
+
+	d.userCache.Store(uid, u.Username)
 	return u.Username, nil
 }
 
