@@ -882,6 +882,9 @@ func (d *discoverer) worker(
 		if !candidate.IsJavaProcess {
 			continue
 		}
+		pp.Println("WorKing for Java Process")
+		pp.Println("proc: ", proc)
+		pp.Println("discovery candidate: ", candidate)
 		javaProc, err := d.processOne(ctx, &candidate, opts)
 		pp.Println("Java Proc: ", javaProc)
 		results <- processResult{javaProc, err}
@@ -894,7 +897,11 @@ func (d *discoverer) processOne(ctx context.Context, proc *DiscoveryCandidate, o
 	if !proc.IsJavaProcess {
 		return nil, nil
 	}
-	cmdArgs := d.parseCommandLine(proc.Cmdline)
+	cmdline, err := proc.Process.Cmdline()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cmdline for PID %d: %w", proc.Process.Pid, err)
+	}
+	cmdArgs := d.parseCommandLine(cmdline)
 
 	// Initialize the Java process structure
 	javaProc := &JavaProcess{
@@ -903,9 +910,9 @@ func (d *discoverer) processOne(ctx context.Context, proc *DiscoveryCandidate, o
 
 		ProcessExecutableName: d.getExecutableName(proc.Exe),
 		ProcessExecutablePath: proc.Exe,
-		ProcessCommand:        proc.Cmdline,
-		ProcessCommandLine:    proc.Cmdline,
-		ProcessCommandArgs:    d.parseCommandLine(proc.Cmdline),
+		ProcessCommand:        cmdline,
+		ProcessCommandLine:    cmdline,
+		ProcessCommandArgs:    cmdArgs,
 		ProcessOwner:          proc.Owner,
 		ProcessCreateTime:     time.Unix(proc.CreateTime/1000, 0),
 		Status:                strings.Join(proc.Status, ","),
@@ -945,6 +952,9 @@ func (d *discoverer) processOne(ctx context.Context, proc *DiscoveryCandidate, o
 	}
 
 	// Extract Java-specific information
+	pp.Println("trying to extract the java info")
+	pp.Println("Javaproc: ", javaProc)
+	pp.Println("cmdArgs: ", cmdArgs)
 	d.extractJavaInfo(javaProc, cmdArgs)
 
 	// Extract service name

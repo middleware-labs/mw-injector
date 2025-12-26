@@ -72,7 +72,7 @@ func GetAgentReportValue() (AgentReportValue, error) {
 		// Decide if this should be a fatal error or just logged (assuming logged for now)
 	}
 
-	// nodeProcs, err := FindAllNodeProcesses(ctx)
+	nodeProcs, err := FindAllNodeProcesses(ctx)
 
 	// b) Docker Containers (Java/Node)
 	// dockerDiscoverer := NewDockerDiscoverer(ctx)
@@ -99,19 +99,19 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	// 	settings[setting.Key] = setting
 	// }
 
-	// // Convert Node containers (Requires a separate conversion method)
+	// Convert Node containers (Requires a separate conversion method)
 	// for _, container := range nodeContainers {
 	// 	setting := convertNodeContainerToServiceSetting(container)
 	// 	settings[setting.Key] = setting
 	// }
 
-	// for _, proc := range nodeProcs {
-	// 	pp.Println("---------------------------------------------------------")
-	// 	// pp.Println(proc)
-	// 	setting := convertNodeProcessToServiceSetting(proc)
-	// 	pp.Println("Found node setting: ", setting)
-	// 	settings[setting.Key] = setting
-	// }
+	for _, proc := range nodeProcs {
+		// pp.Println("---------------------------------------------------------")
+		// pp.Println(proc)
+		setting := convertNodeProcessToServiceSetting(proc)
+		// pp.Println("Found node setting: ", setting)
+		settings[setting.Key] = setting
+	}
 
 	reportValue := AgentReportValue{
 		osKey: OSConfig{
