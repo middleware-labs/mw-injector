@@ -149,6 +149,13 @@ func (c *ListAllCommand) Execute() error {
 		return fmt.Errorf("error: %v", err)
 	}
 
+	// nodeProcs, err := discovery.FindAllNodeProcesses(ctx)
+	// if err != nil {
+	// 	return fmt.Errorf("error: %v", err)
+	// }
+
+	// pp.Println(nodeProcs)
+
 	// Get Docker containers
 	dockerDiscoverer := discovery.NewDockerDiscoverer(ctx)
 	javaContainers, javaDockerErr := dockerDiscoverer.DiscoverJavaContainers()
@@ -587,7 +594,6 @@ func (c *ListAllCommand) fileExists(path string) bool {
 	return err == nil
 }
 
-// truncate truncates a string to a maximum length
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s

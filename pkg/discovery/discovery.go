@@ -4,6 +4,7 @@ package discovery
 
 import (
 	"context"
+	"sync"
 	"time"
 )
 
@@ -198,6 +199,7 @@ func NewDiscovererWithOptions(ctx context.Context, opts DiscoveryOptions) *disco
 		ctx:               ctx,
 		opts:              opts,
 		containerDetector: NewContainerDetector(),
+		userCache:         sync.Map{},
 	}
 }
 
@@ -213,6 +215,17 @@ func FindAllJavaProcesses(ctx context.Context) ([]JavaProcess, error) {
 	defer discoverer.Close()
 
 	return discoverer.DiscoverWithOptions(ctx, opts)
+}
+
+func FindAllNodeProcesses(ctx context.Context) ([]NodeProcess, error) {
+	opts := DefaultDiscoveryOptions()
+	opts.ExcludeContainers = true
+	opts.IncludeContainerInfo = true
+
+	discoverer := NewDiscoverer(ctx, opts)
+	defer discoverer.Close()
+
+	return discoverer.DiscoverNodeWithOptions(ctx, opts)
 }
 
 // FindCurrentUserJavaProcesses discovers Java processes for the current user only

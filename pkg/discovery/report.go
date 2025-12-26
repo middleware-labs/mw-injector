@@ -72,10 +72,12 @@ func GetAgentReportValue() (AgentReportValue, error) {
 		// Decide if this should be a fatal error or just logged (assuming logged for now)
 	}
 
+	nodeProcs, err := FindAllNodeProcesses(ctx)
+
 	// b) Docker Containers (Java/Node)
-	dockerDiscoverer := NewDockerDiscoverer(ctx)
-	javaContainers, _ := dockerDiscoverer.DiscoverJavaContainers() // Error handling omitted for brevity
-	nodeContainers, _ := dockerDiscoverer.DiscoverNodeContainers() // Error handling omitted for brevity
+	// dockerDiscoverer := NewDockerDiscoverer(ctx)
+	// javaContainers, _ := dockerDiscoverer.DiscoverJavaContainers() // Error handling omitted for brevity
+	// nodeContainers, _ := dockerDiscoverer.DiscoverNodeContainers() // Error handling omitted for brevity
 
 	// --- 2. Convert to AgentReportValue (ServiceSetting) ---
 	osKey := runtime.GOOS
@@ -91,15 +93,23 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	}
 
 	// Convert Java containers
-	for _, container := range javaContainers {
-		// ContainerInfo includes the underlying JavaProcess
-		setting := convertJavaContainerToServiceSetting(container)
-		settings[setting.Key] = setting
-	}
+	// for _, container := range javaContainers {
+	// 	// ContainerInfo includes the underlying JavaProcess
+	// 	setting := convertJavaContainerToServiceSetting(container)
+	// 	settings[setting.Key] = setting
+	// }
 
 	// Convert Node containers (Requires a separate conversion method)
-	for _, container := range nodeContainers {
-		setting := convertNodeContainerToServiceSetting(container)
+	// for _, container := range nodeContainers {
+	// 	setting := convertNodeContainerToServiceSetting(container)
+	// 	settings[setting.Key] = setting
+	// }
+
+	for _, proc := range nodeProcs {
+		// pp.Println("---------------------------------------------------------")
+		// pp.Println(proc)
+		setting := convertNodeProcessToServiceSetting(proc)
+		// pp.Println("Found node setting: ", setting)
 		settings[setting.Key] = setting
 	}
 
@@ -127,6 +137,23 @@ func convertJavaContainerToServiceSetting(container DockerContainer) ServiceSett
 		ServiceType: "docker",
 		Language:    "java",
 		Key:         key,
+	}
+}
+
+func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
+
+	key := fmt.Sprintf("host-%d", proc.ProcessPID)
+	return ServiceSetting{
+		PID:            0,
+		ServiceName:    proc.ServiceName,
+		Status:         proc.Status,
+		Enabled:        true,
+		ServiceType:    "system",
+		Language:       "node",
+		RuntimeVersion: proc.ProcessRuntimeVersion,
+		AgentPath:      proc.NodeAgentPath,
+		Instrumented:   proc.HasNodeAgent,
+		Key:            key,
 	}
 }
 
