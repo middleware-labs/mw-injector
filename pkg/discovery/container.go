@@ -64,66 +64,84 @@ func (cd *ContainerDetector) IsProcessInContainer(pid int32) (*ContainerInfo, er
 // checkCgroup examines the process cgroup to detect container runtimes
 func (cd *ContainerDetector) checkCgroup(pid int32) (*ContainerInfo, error) {
 	cgroupPath := fmt.Sprintf("/proc/%d/cgroup", pid)
-	file, err := os.Open(cgroupPath)
+	data, err := os.ReadFile(cgroupPath)
 	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// Docker patterns
-		if strings.Contains(line, "/docker/") {
-			containerID := cd.extractDockerIDFromCgroup(line)
-			return &ContainerInfo{
-				IsContainer: true,
-				ContainerID: containerID,
-				Runtime:     "docker",
-			}, nil
-		}
-
-		// Podman patterns
-		if strings.Contains(line, "/libpod-") || strings.Contains(line, "machine.slice/libpod-") {
-			containerID := cd.extractPodmanIDFromCgroup(line)
-			return &ContainerInfo{
-				IsContainer: true,
-				ContainerID: containerID,
-				Runtime:     "podman",
-			}, nil
-		}
-
-		// Containerd patterns
-		if strings.Contains(line, "/containerd/") {
-			containerID := cd.extractContainerdIDFromCgroup(line)
-			return &ContainerInfo{
-				IsContainer: true,
-				ContainerID: containerID,
-				Runtime:     "containerd",
-			}, nil
-		}
-
-		// systemd-nspawn patterns
-		if strings.Contains(line, "machine-") && strings.Contains(line, ".scope") {
-			return &ContainerInfo{
-				IsContainer: true,
-				Runtime:     "systemd-nspawn",
-			}, nil
-		}
-
-		// LXC patterns
-		if strings.Contains(line, "/lxc/") {
-			containerID := cd.extractLXCIDFromCgroup(line)
-			return &ContainerInfo{
-				IsContainer: true,
-				ContainerID: containerID,
-				Runtime:     "lxc",
-			}, nil
-		}
+		return &ContainerInfo{IsContainer: false}, err
 	}
 
-	return &ContainerInfo{IsContainer: false}, scanner.Err()
+	content := string(data)
+	if content == "" {
+		return &ContainerInfo{IsContainer: false}, nil
+	}
+
+	// 1. DOCKER & CONTAINERD
+	// v1: /docker/<ID> or /containerd/<ID>
+	// v2: /system.slice/docker-<ID>.scope or /system.slice/containerd-<ID>.scope
+	dockerRegex := regexp.MustCompile(`(?:docker-|containerd-|/docker/|/containerd/)([a-fA-F0-9]{64})`)
+	if matches := dockerRegex.FindStringSubmatch(content); len(matches) > 1 {
+		return &ContainerInfo{
+			IsContainer: true,
+			ContainerID: matches[1],
+			Runtime:     "docker/containerd",
+		}, nil
+	}
+
+	// 2. KUBERNETES (CRI-O / Containerd)
+	// Matches: cri-containerd-<ID>.scope, crio-<ID>.scope, or kubepods paths
+	k8sRegex := regexp.MustCompile(`(?:cri-containerd-|crio-|/kubepods.*/pod.*/)([a-fA-F0-9]{64})`)
+	if matches := k8sRegex.FindStringSubmatch(content); len(matches) > 1 {
+		return &ContainerInfo{
+			IsContainer: true,
+			ContainerID: matches[1],
+			Runtime:     "kubernetes",
+		}, nil
+	}
+
+	// 3. PODMAN
+	// Matches: libpod-<ID>.scope or /libpod-<ID>
+	podmanRegex := regexp.MustCompile(`(?:libpod-|/libpod-)([a-fA-F0-9]{64})`)
+	if matches := podmanRegex.FindStringSubmatch(content); len(matches) > 1 {
+		return &ContainerInfo{
+			IsContainer: true,
+			ContainerID: matches[1],
+			Runtime:     "podman",
+		}, nil
+	}
+
+	// 4. LXC
+	lxcRegex := regexp.MustCompile(`/lxc/([^/\n]+)`)
+	if matches := lxcRegex.FindStringSubmatch(content); len(matches) > 1 {
+		return &ContainerInfo{
+			IsContainer: true,
+			ContainerID: matches[1],
+			Runtime:     "lxc",
+		}, nil
+	}
+
+	// 5. GENERIC FALLBACK (Systemd Scopes)
+	// If it's in a .scope but not the init.scope or user.slice, it's likely a container
+	if strings.Contains(content, ".scope") && !strings.Contains(content, "init.scope") {
+		return &ContainerInfo{
+			IsContainer: true,
+			Runtime:     "generic-container",
+		}, nil
+	}
+
+	return &ContainerInfo{IsContainer: false}, nil
+}
+
+func (cd *ContainerDetector) checkNamespaceFallback(pid int32, info *ContainerInfo) {
+	if info.IsContainer {
+		return // Already detected
+	}
+
+	hostNs, _ := os.Readlink("/proc/1/ns/mnt")
+	procNs, _ := os.Readlink(fmt.Sprintf("/proc/%d/ns/mnt", pid))
+
+	if hostNs != "" && procNs != "" && hostNs != procNs {
+		info.IsContainer = true
+		info.Runtime = "namespace-isolated" // Container detected via isolation
+	}
 }
 
 // checkMountNamespace checks if the process is in a different mount namespace
@@ -350,6 +368,8 @@ func (cd *ContainerDetector) GetContainerNameByID(containerID, runtime string) s
 
 	switch runtime {
 	case "docker":
+		return cd.getDockerContainerName(containerID)
+	case "docker/containerd":
 		return cd.getDockerContainerName(containerID)
 	case "podman":
 		return cd.getPodmanContainerName(containerID)

@@ -154,8 +154,6 @@ func (c *ListAllCommand) Execute() error {
 	// 	return fmt.Errorf("error: %v", err)
 	// }
 
-	// pp.Println(nodeProcs)
-
 	// Get Docker containers
 	dockerDiscoverer := discovery.NewDockerDiscoverer(ctx)
 	javaContainers, javaDockerErr := dockerDiscoverer.DiscoverJavaContainers()

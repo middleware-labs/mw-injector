@@ -72,11 +72,11 @@ func GetAgentReportValue() (AgentReportValue, error) {
 		// Decide if this should be a fatal error or just logged (assuming logged for now)
 	}
 
-	nodeProcs, err := FindAllNodeProcesses(ctx)
+	// nodeProcs, err := FindAllNodeProcesses(ctx)
 
-	// b) Docker Containers (Java/Node)
+	// b) Docker Containers (java/Node)
 	// dockerDiscoverer := NewDockerDiscoverer(ctx)
-	// javaContainers, _ := dockerDiscoverer.DiscoverJavaContainers() // Error handling omitted for brevity
+	// javaContainers, _ := dockContainerDetectorerDiscoverer.DiscoverJavaContainers() // Error handling omitted for brevity
 	// nodeContainers, _ := dockerDiscoverer.DiscoverNodeContainers() // Error handling omitted for brevity
 
 	// --- 2. Convert to AgentReportValue (ServiceSetting) ---
@@ -86,7 +86,10 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	// Convert host processes
 	for _, proc := range processes {
 		// Only report processes we care about (non-Tomcat, non-Container for simplicity)
-		if !proc.IsTomcat() && !proc.ContainerInfo.IsContainer {
+		// if !proc.IsTomcat() && !proc.ContainerInfo.IsContainer {
+		if !proc.IsTomcat() {
+			if proc.IsInContainer() {
+			}
 			setting := convertJavaProcessToServiceSetting(proc)
 			settings[setting.Key] = setting
 		}
@@ -105,13 +108,10 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	// 	settings[setting.Key] = setting
 	// }
 
-	for _, proc := range nodeProcs {
-		// pp.Println("---------------------------------------------------------")
-		// pp.Println(proc)
-		setting := convertNodeProcessToServiceSetting(proc)
-		// pp.Println("Found node setting: ", setting)
-		settings[setting.Key] = setting
-	}
+	// for _, proc := range nodeProcs {
+	// 	setting := convertNodeProcessToServiceSetting(proc)
+	// 	settings[setting.Key] = setting
+	// }
 
 	reportValue := AgentReportValue{
 		osKey: OSConfig{
@@ -234,6 +234,9 @@ func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
 func detectDeploymentType(proc *JavaProcess) string {
 	if proc.ProcessOwner != "root" && proc.ProcessOwner != os.Getenv("USER") {
 		return "systemd"
+	}
+	if proc.IsInContainer() {
+		return "docker"
 	}
 	return "standalone"
 }

@@ -58,7 +58,6 @@ func (d *discoverer) DiscoverWithOptions(ctx context.Context, opts DiscoveryOpti
 	// Filter for Java processes first to reduce workload
 	// javaDiscoverCandidates := d.filterJavaProcesses(allProcesses)
 
-	// pp.Println(javaDiscoverCandidates)
 	// Process concurrently with worker pool
 	return d.processWithWorkerPool(ctx, allProcesses, opts)
 }
@@ -116,8 +115,6 @@ func (d *discoverer) filterJavaProcesses(processes []*process.Process) []*Discov
 
 	for _, proc := range processes {
 		if discoveryCandidate := d.getJavaDiscoveryCandidateForProcesss(proc); discoveryCandidate.IsJavaProcess {
-			// pp.Println("Lol here with, ", proc)
-			// pp.Println("And the candidate,  ", discoveryCandidate)
 			javaProcesses = append(javaProcesses, &discoveryCandidate)
 		}
 	}
@@ -306,7 +303,6 @@ func (d *discoverer) processNodeWithWorkerPool(ctx context.Context, processes []
 	if len(processes) == 0 {
 		return []NodeProcess{}, nil
 	}
-	// pp.Println(opts)
 
 	// Create channels for work distribution
 	jobs := make(chan *process.Process, len(processes))
@@ -369,7 +365,6 @@ func (d *discoverer) processNodeWithWorkerPool(ctx context.Context, processes []
 	if len(errors) > 0 && !opts.SkipPermissionErrors {
 		return nodeProcesses, fmt.Errorf("encountered %d errors during Node.js discovery: %v", len(errors), errors[0])
 	}
-	// pp.Println("Post PROCESESSING: ", nodeProcesses)
 	return nodeProcesses, nil
 }
 
@@ -882,11 +877,8 @@ func (d *discoverer) worker(
 		if !candidate.IsJavaProcess {
 			continue
 		}
-		pp.Println("WorKing for Java Process")
-		pp.Println("proc: ", proc)
-		pp.Println("discovery candidate: ", candidate)
+
 		javaProc, err := d.processOne(ctx, &candidate, opts)
-		pp.Println("Java Proc: ", javaProc)
 		results <- processResult{javaProc, err}
 	}
 }
@@ -933,6 +925,7 @@ func (d *discoverer) processOne(ctx context.Context, proc *DiscoveryCandidate, o
 		} else {
 			javaProc.ContainerInfo = containerInfo
 
+			pp.Println("Found container info", javaProc.ContainerInfo)
 			// If we're excluding containers and this is in a container, return nil
 			if opts.ExcludeContainers && containerInfo.IsContainer {
 				return nil, fmt.Errorf("process %d is running in container, skipping", javaProc.ProcessPID)
@@ -952,9 +945,6 @@ func (d *discoverer) processOne(ctx context.Context, proc *DiscoveryCandidate, o
 	}
 
 	// Extract Java-specific information
-	pp.Println("trying to extract the java info")
-	pp.Println("Javaproc: ", javaProc)
-	pp.Println("cmdArgs: ", cmdArgs)
 	d.extractJavaInfo(javaProc, cmdArgs)
 
 	// Extract service name

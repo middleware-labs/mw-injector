@@ -66,6 +66,12 @@ type DockerContainer struct {
 	InstrumentedAt time.Time `json:"instrumented_at,omitempty"`
 }
 
+type ContainerCandidate struct {
+	ID    string
+	Image string
+	Names string
+}
+
 // DockerMount represents a Docker volume mount
 type DockerMount struct {
 	Type        string `json:"type"`

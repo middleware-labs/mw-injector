@@ -9,6 +9,10 @@ import (
 // extractServiceName extracts a meaningful service name from command arguments
 func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string) {
 	serviceName := ""
+	if javaProc.IsInContainer() {
+		javaProc.ServiceName = javaProc.ContainerInfo.ContainerName
+		return
+	}
 
 	// Strategy 1: System Properties (highest priority)
 	serviceName = d.extractFromSystemProperties(cmdArgs)
