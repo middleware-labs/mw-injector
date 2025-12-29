@@ -168,7 +168,6 @@ type ContainerState struct {
 // InstrumentContainer instruments a specific Docker container
 func (do *DockerOperations) InstrumentContainer(containerName string, cfg *config.ProcessConfiguration) error {
 	// Discover the container
-	pp.Println("here lols")
 	pp.Println("Container name: ", containerName)
 	container, err := do.discoverer.GetContainerByName(containerName)
 	if err != nil {
