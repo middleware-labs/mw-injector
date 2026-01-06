@@ -168,7 +168,6 @@ type ContainerState struct {
 // InstrumentContainer instruments a specific Docker container
 func (do *DockerOperations) InstrumentContainer(containerName string, cfg *config.ProcessConfiguration) error {
 	// Discover the container
-	pp.Println("Container name: ", containerName)
 	container, err := do.discoverer.GetContainerByName(containerName)
 	if err != nil {
 		return fmt.Errorf("container not found: %w", err)
@@ -181,7 +180,6 @@ func (do *DockerOperations) InstrumentContainer(containerName string, cfg *confi
 
 	// Determine instrumentation strategy
 	if container.IsCompose {
-		pp.Println("Compose container")
 		if container.IsJava {
 			return do.instrumentComposeContainer(container, cfg)
 		} else if container.IsNodeJS {
@@ -442,7 +440,6 @@ func (do *DockerOperations) instrumentComposeNodeContainer(
 	if container.ComposeFile == "" {
 		return fmt.Errorf("compose file not found for container %s", container.ContainerName)
 	}
-	pp.Println("Compose File for node: ", container.ComposeFile)
 	modifier := NewComposeModifier(container.ComposeFile)
 
 	// Step 1: Validate compose file
@@ -883,7 +880,6 @@ func (do *DockerOperations) buildDockerRunCommand(config map[string]interface{},
 
 // runContainer runs a docker run command
 func (do *DockerOperations) runContainer(command string) error {
-	pp.Println("Running the docker command: ", command)
 	cmd := exec.CommandContext(do.ctx, "sh", "-c", command)
 	return cmd.Run()
 }
@@ -918,7 +914,6 @@ func (do *DockerOperations) modifyComposeFile(container *discovery.DockerContain
 
 	// Add instrumentation to service
 	if container.IsNodeJS {
-		pp.Println("Service: ", service)
 		if err := modifier.addNodeInstrumentation(&service, cfg, do.hostAgentPath); err != nil {
 			return fmt.Errorf("failed to add instrumentation: %w", err)
 		}
@@ -928,7 +923,6 @@ func (do *DockerOperations) modifyComposeFile(container *discovery.DockerContain
 
 	// Update the service in the compose data
 	composeData.Services[container.ComposeService] = service
-	pp.Println("compose Data, ", composeData)
 
 	// Write the modified compose file
 	if err := modifier.Write(composeData); err != nil {
@@ -966,10 +960,6 @@ func (cm *ComposeModifier) Write(composeFile *ComposeFile) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal YAML: %w", err)
 	}
-
-	pp.Println("=== MODIFIED COMPOSE FILE CONTENT ===")
-	pp.Println(string(data))
-	pp.Println("=== END MODIFIED CONTENT ===")
 
 	// Write to file
 	if err := os.WriteFile(cm.filePath, data, 0o644); err != nil {
@@ -1089,8 +1079,6 @@ func (cm *ComposeModifier) addNodeInstrumentation(
 	hostAgentPath string,
 ) error {
 	cfg.MWServiceName = ""
-	pp.Println("----------------------------------------------------------")
-	pp.Println("cfg: OTEL SERVICE NAME: ", cfg.OtelServiceName)
 	mwEnv := cfg.ToEnvironmentVariables()
 	nodeOptions := fmt.Sprintf("NODE_OPTIONS=--import ${PWD}/autoinstrumentation/mw-register.js")
 

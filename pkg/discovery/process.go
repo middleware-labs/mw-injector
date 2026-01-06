@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/k0kubun/pp"
 	"github.com/shirou/gopsutil/v4/process"
 )
 
@@ -128,7 +127,6 @@ func (d *discoverer) filterNodeProcesses(processes []*process.Process) []*proces
 	for _, proc := range processes {
 		if d.isNodeProcess(proc) {
 			nodeProcesses = append(nodeProcesses, proc)
-			// pp.Println("FOUND YA LITTLE NODE: ", nodeProcesses)
 		}
 	}
 
@@ -552,7 +550,6 @@ func (d *discoverer) extractPackageInfo(nodeProc *NodeProcess, workingDir string
 	if _, err := os.Stat(packageJsonPath); err == nil {
 		// TODO: Parse package.json and extract name, version, dependencies
 		// This would require json.Unmarshal(data, &PackageInfo{})
-		pp.Println("Does not exist, package")
 		nodeProc.PackageName = "unknown"    // Placeholder
 		nodeProc.PackageVersion = "unknown" // Placeholder
 	}
@@ -925,7 +922,6 @@ func (d *discoverer) processOne(ctx context.Context, proc *DiscoveryCandidate, o
 		} else {
 			javaProc.ContainerInfo = containerInfo
 
-			pp.Println("Found container info", javaProc.ContainerInfo)
 			// If we're excluding containers and this is in a container, return nil
 			if opts.ExcludeContainers && containerInfo.IsContainer {
 				return nil, fmt.Errorf("process %d is running in container, skipping", javaProc.ProcessPID)
