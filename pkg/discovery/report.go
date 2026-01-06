@@ -11,6 +11,8 @@ import (
 	"os"
 	"runtime"
 	"time"
+
+	"github.com/k0kubun/pp"
 )
 
 const apiPathForAgentSetting = "api/v1/agent/public/setting/"
@@ -95,6 +97,12 @@ func GetAgentReportValue() (AgentReportValue, error) {
 		}
 	}
 
+	pythonProcs, _ := FindAllPythonProcess(ctx)
+	pp.Println("All python procs: ", pythonProcs)
+	for _, proc := range pythonProcs {
+		setting := convertPythonProcessToServiceSetting(proc)
+		settings[setting.Key] = setting
+	}
 	// Convert Java containers
 	// for _, container := range javaContainers {
 	// 	// ContainerInfo includes the underlying JavaProcess
@@ -154,6 +162,45 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 		AgentPath:      proc.NodeAgentPath,
 		Instrumented:   proc.HasNodeAgent,
 		Key:            key,
+	}
+}
+
+func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
+	// Generate a unique key for the service
+	key := fmt.Sprintf("host-%d", proc.ProcessPID)
+
+	// Determine the service type based on process manager or environment
+	serviceType := "standalone"
+	if proc.IsGunicornProcess || proc.IsUvicornProcess {
+		serviceType = "wsgi/asgi"
+	} else if proc.IsCeleryProcess {
+		serviceType = "worker"
+	} else if proc.IsInContainer() {
+		serviceType = "docker"
+	}
+
+	return ServiceSetting{
+		PID:            int(proc.ProcessPID),
+		ServiceName:    proc.ServiceName,
+		Owner:          proc.ProcessOwner,
+		Status:         proc.Status,
+		Enabled:        true, // Discovered processes are instrumentation candidates
+		ServiceType:    serviceType,
+		Language:       "python",
+		RuntimeVersion: proc.ProcessRuntimeVersion,
+
+		// Python specific "Main" info
+		MainClass: proc.ModulePath, // If using -m
+		JarFile:   proc.EntryPoint, // If using script.py
+
+		// Instrumentation Status
+		HasAgent:          proc.HasPythonAgent,
+		IsMiddlewareAgent: proc.IsMiddlewareAgent,
+		AgentPath:         proc.PythonAgentPath,
+		Instrumented:      proc.HasPythonAgent,
+
+		// Metadata and Unique Key
+		Key: key,
 	}
 }
 
