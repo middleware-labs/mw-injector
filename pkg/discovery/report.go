@@ -72,10 +72,12 @@ func GetAgentReportValue() (AgentReportValue, error) {
 		// Decide if this should be a fatal error or just logged (assuming logged for now)
 	}
 
-	// b) Docker Containers (Java/Node)
-	dockerDiscoverer := NewDockerDiscoverer(ctx)
-	javaContainers, _ := dockerDiscoverer.DiscoverJavaContainers() // Error handling omitted for brevity
-	nodeContainers, _ := dockerDiscoverer.DiscoverNodeContainers() // Error handling omitted for brevity
+	nodeProcs, err := FindAllNodeProcesses(ctx)
+
+	// b) Docker Containers (java/Node)
+	// dockerDiscoverer := NewDockerDiscoverer(ctx)
+	// javaContainers, _ := dockContainerDetectorerDiscoverer.DiscoverJavaContainers() // Error handling omitted for brevity
+	// nodeContainers, _ := dockerDiscoverer.DiscoverNodeContainers() // Error handling omitted for brevity
 
 	// --- 2. Convert to AgentReportValue (ServiceSetting) ---
 	osKey := runtime.GOOS
@@ -84,22 +86,30 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	// Convert host processes
 	for _, proc := range processes {
 		// Only report processes we care about (non-Tomcat, non-Container for simplicity)
-		if !proc.IsTomcat() && !proc.ContainerInfo.IsContainer {
+		// if !proc.IsTomcat() && !proc.ContainerInfo.IsContainer {
+		if !proc.IsTomcat() {
+			if proc.IsInContainer() {
+			}
 			setting := convertJavaProcessToServiceSetting(proc)
 			settings[setting.Key] = setting
 		}
 	}
 
 	// Convert Java containers
-	for _, container := range javaContainers {
-		// ContainerInfo includes the underlying JavaProcess
-		setting := convertJavaContainerToServiceSetting(container)
-		settings[setting.Key] = setting
-	}
+	// for _, container := range javaContainers {
+	// 	// ContainerInfo includes the underlying JavaProcess
+	// 	setting := convertJavaContainerToServiceSetting(container)
+	// 	settings[setting.Key] = setting
+	// }
 
 	// Convert Node containers (Requires a separate conversion method)
-	for _, container := range nodeContainers {
-		setting := convertNodeContainerToServiceSetting(container)
+	// for _, container := range nodeContainers {
+	// 	setting := convertNodeContainerToServiceSetting(container)
+	// 	settings[setting.Key] = setting
+	// }
+
+	for _, proc := range nodeProcs {
+		setting := convertNodeProcessToServiceSetting(proc)
 		settings[setting.Key] = setting
 	}
 
@@ -127,6 +137,23 @@ func convertJavaContainerToServiceSetting(container DockerContainer) ServiceSett
 		ServiceType: "docker",
 		Language:    "java",
 		Key:         key,
+	}
+}
+
+func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
+
+	key := fmt.Sprintf("host-%d", proc.ProcessPID)
+	return ServiceSetting{
+		PID:            0,
+		ServiceName:    proc.ServiceName,
+		Status:         proc.Status,
+		Enabled:        true,
+		ServiceType:    "system",
+		Language:       "node",
+		RuntimeVersion: proc.ProcessRuntimeVersion,
+		AgentPath:      proc.NodeAgentPath,
+		Instrumented:   proc.HasNodeAgent,
+		Key:            key,
 	}
 }
 
@@ -207,6 +234,9 @@ func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
 func detectDeploymentType(proc *JavaProcess) string {
 	if proc.ProcessOwner != "root" && proc.ProcessOwner != os.Getenv("USER") {
 		return "systemd"
+	}
+	if proc.IsInContainer() {
+		return "docker"
 	}
 	return "standalone"
 }

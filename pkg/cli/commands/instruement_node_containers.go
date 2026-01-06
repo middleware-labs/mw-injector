@@ -34,7 +34,6 @@ func NewConfigNodeContainerCommand(
 }
 
 func (c *ConfigNodeContainerCommand) Execute() error {
-	pp.Println("EXECUTE------------------------")
 	ctx := context.Background()
 
 	// Check if running as root
@@ -124,7 +123,6 @@ func (c *ConfigNodeContainerCommand) Execute() error {
 		cfg.MWAgentService = "" // Reserved hack
 		cfg.OtelServiceName = container.GetServiceName()
 		cfg.NodeAgentPath = docker.DefaultContainerAgentNodePath
-		pp.Println("cfg: ", cfg)
 
 		// Instrument container
 		err := dockerOps.InstrumentContainer(container.ContainerName, &cfg)
