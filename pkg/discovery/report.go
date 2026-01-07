@@ -76,11 +76,6 @@ func GetAgentReportValue() (AgentReportValue, error) {
 
 	nodeProcs, err := FindAllNodeProcesses(ctx)
 
-	// b) Docker Containers (java/Node)
-	// dockerDiscoverer := NewDockerDiscoverer(ctx)
-	// javaContainers, _ := dockContainerDetectorerDiscoverer.DiscoverJavaContainers() // Error handling omitted for brevity
-	// nodeContainers, _ := dockerDiscoverer.DiscoverNodeContainers() // Error handling omitted for brevity
-
 	// --- 2. Convert to AgentReportValue (ServiceSetting) ---
 	osKey := runtime.GOOS
 	settings := map[string]ServiceSetting{}
@@ -98,24 +93,11 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	}
 
 	pythonProcs, _ := FindAllPythonProcess(ctx)
-	// pp.Println("All python procs: ", pythonProcs)
 	for _, proc := range pythonProcs {
 		setting := convertPythonProcessToServiceSetting(proc)
 		pp.Printf("%s: %v", setting.Key, setting)
 		settings[setting.Key] = setting
 	}
-	// Convert Java containers
-	// for _, container := range javaContainers {
-	// 	// ContainerInfo includes the underlying JavaProcess
-	// 	setting := convertJavaContainerToServiceSetting(container)
-	// 	settings[setting.Key] = setting
-	// }
-
-	// Convert Node containers (Requires a separate conversion method)
-	// for _, container := range nodeContainers {
-	// 	setting := convertNodeContainerToServiceSetting(container)
-	// 	settings[setting.Key] = setting
-	// }
 
 	for _, proc := range nodeProcs {
 		setting := convertNodeProcessToServiceSetting(proc)
@@ -168,7 +150,6 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 
 func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
 	// Generate a unique key for the service
-	pp.Println("Discovery proc: ", proc)
 	key := fmt.Sprintf("host-%d", proc.ProcessPID)
 
 	// Determine the service type based on process manager or environment
