@@ -11,6 +11,8 @@ import (
 	"os"
 	"runtime"
 	"time"
+
+	"github.com/k0kubun/pp"
 )
 
 const apiPathForAgentSetting = "api/v1/agent/public/setting/"
@@ -74,11 +76,6 @@ func GetAgentReportValue() (AgentReportValue, error) {
 
 	nodeProcs, err := FindAllNodeProcesses(ctx)
 
-	// b) Docker Containers (java/Node)
-	// dockerDiscoverer := NewDockerDiscoverer(ctx)
-	// javaContainers, _ := dockContainerDetectorerDiscoverer.DiscoverJavaContainers() // Error handling omitted for brevity
-	// nodeContainers, _ := dockerDiscoverer.DiscoverNodeContainers() // Error handling omitted for brevity
-
 	// --- 2. Convert to AgentReportValue (ServiceSetting) ---
 	osKey := runtime.GOOS
 	settings := map[string]ServiceSetting{}
@@ -95,18 +92,12 @@ func GetAgentReportValue() (AgentReportValue, error) {
 		}
 	}
 
-	// Convert Java containers
-	// for _, container := range javaContainers {
-	// 	// ContainerInfo includes the underlying JavaProcess
-	// 	setting := convertJavaContainerToServiceSetting(container)
-	// 	settings[setting.Key] = setting
-	// }
-
-	// Convert Node containers (Requires a separate conversion method)
-	// for _, container := range nodeContainers {
-	// 	setting := convertNodeContainerToServiceSetting(container)
-	// 	settings[setting.Key] = setting
-	// }
+	pythonProcs, _ := FindAllPythonProcess(ctx)
+	for _, proc := range pythonProcs {
+		setting := convertPythonProcessToServiceSetting(proc)
+		pp.Printf("%s: %v", setting.Key, setting)
+		settings[setting.Key] = setting
+	}
 
 	for _, proc := range nodeProcs {
 		setting := convertNodeProcessToServiceSetting(proc)
@@ -154,6 +145,46 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 		AgentPath:      proc.NodeAgentPath,
 		Instrumented:   proc.HasNodeAgent,
 		Key:            key,
+	}
+}
+
+func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
+	// Generate a unique key for the service
+	key := fmt.Sprintf("host-%d", proc.ProcessPID)
+
+	// Determine the service type based on process manager or environment
+	serviceType := "standalone"
+
+	if proc.IsInContainer() {
+		serviceType = "docker"
+	} else if proc.IsGunicornProcess || proc.IsUvicornProcess {
+		serviceType = "wsgi/asgi"
+	} else if proc.IsCeleryProcess {
+		serviceType = "worker"
+	}
+
+	return ServiceSetting{
+		PID:            int(proc.ProcessPID),
+		ServiceName:    proc.ServiceName,
+		Owner:          proc.ProcessOwner,
+		Status:         proc.Status,
+		Enabled:        true, // Discovered processes are instrumentation candidates
+		ServiceType:    serviceType,
+		Language:       "python",
+		RuntimeVersion: proc.ProcessRuntimeVersion,
+
+		// Python specific "Main" info
+		MainClass: proc.ModulePath, // If using -m
+		JarFile:   proc.EntryPoint, // If using script.py
+
+		// Instrumentation Status
+		HasAgent:          proc.HasPythonAgent,
+		IsMiddlewareAgent: proc.IsMiddlewareAgent,
+		AgentPath:         proc.PythonAgentPath,
+		Instrumented:      proc.HasPythonAgent,
+
+		// Metadata and Unique Key
+		Key: key,
 	}
 }
 

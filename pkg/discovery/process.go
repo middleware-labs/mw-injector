@@ -80,6 +80,323 @@ func (d *discoverer) DiscoverNodeWithOptions(
 	return d.processNodeWithWorkerPool(ctx, nodeProcesses, opts)
 }
 
+func (d *discoverer) DiscoverPythonWithOptions(ctx context.Context, opts DiscoveryOptions) ([]PythonProcess, error) {
+	var cancel context.CancelFunc
+	if opts.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
+		defer cancel()
+	}
+
+	allProcesses, err := process.Processes()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get process list: %w", err)
+	}
+
+	// Filter for Python processes first
+	var pythonCandidates []*process.Process
+	for _, proc := range allProcesses {
+		if d.isPythonProcess(proc) {
+			pythonCandidates = append(pythonCandidates, proc)
+		}
+	}
+
+	return d.processPythonWithWorkerPool(ctx, pythonCandidates, opts)
+}
+
+type pythonProcessResult struct {
+	process *PythonProcess
+	err     error
+}
+
+func (d *discoverer) processPythonWithWorkerPool(ctx context.Context, processes []*process.Process, opts DiscoveryOptions) ([]PythonProcess, error) {
+	if len(processes) == 0 {
+		return []PythonProcess{}, nil
+	}
+
+	jobs := make(chan *process.Process, len(processes))
+	results := make(chan pythonProcessResult, len(processes))
+
+	numWorkers := opts.MaxConcurrency
+	if numWorkers <= 0 {
+		numWorkers = 10
+	}
+	if numWorkers > len(processes) {
+		numWorkers = len(processes)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go d.pythonWorker(ctx, jobs, results, opts, &wg)
+	}
+
+	go func() {
+		defer close(jobs)
+		for _, proc := range processes {
+			select {
+			case jobs <- proc:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var pyProcesses []PythonProcess
+	for result := range results {
+		if result.err != nil {
+			continue
+		}
+		if result.process != nil {
+			if d.passesPythonFilter(*result.process, opts.Filter) {
+				pyProcesses = append(pyProcesses, *result.process)
+			}
+		}
+	}
+
+	return pyProcesses, nil
+}
+
+func (d *discoverer) pythonWorker(ctx context.Context, jobs <-chan *process.Process, results chan<- pythonProcessResult, opts DiscoveryOptions, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for proc := range jobs {
+		select {
+		case <-ctx.Done():
+			results <- pythonProcessResult{nil, ctx.Err()}
+			return
+		default:
+		}
+		pyProc, err := d.processOnePython(ctx, proc, opts)
+		results <- pythonProcessResult{pyProc, err}
+	}
+}
+
+func (d *discoverer) processOnePython(ctx context.Context, proc *process.Process, opts DiscoveryOptions) (*PythonProcess, error) {
+	pid := proc.Pid
+	cmdline, _ := proc.Cmdline()
+	exe, _ := proc.Exe()
+	parentPID, _ := proc.Ppid()
+	owner, _ := d.getProcessOwner(proc)
+	createTime, _ := proc.CreateTime()
+	status, _ := proc.Status()
+	cmdArgs := d.parseCommandLine(cmdline)
+
+	pyProc := &PythonProcess{
+		ProcessPID:                pid,
+		ProcessParentPID:          parentPID,
+		ProcessExecutablePath:     exe,
+		ProcessExecutableName:     filepath.Base(exe),
+		ProcessCommandLine:        cmdline,
+		ProcessCommandArgs:        cmdArgs,
+		ProcessOwner:              owner,
+		ProcessCreateTime:         time.Unix(createTime/1000, 0),
+		Status:                    strings.Join(status, ","),
+		ProcessRuntimeName:        "python",
+		ProcessRuntimeDescription: "Python Interpreter",
+	}
+
+	// Container Detection
+	if opts.IncludeContainerInfo {
+		containerInfo, err := d.containerDetector.IsProcessInContainer(pyProc.ProcessPID)
+		if err == nil && containerInfo.IsContainer {
+			pyProc.ContainerInfo = containerInfo
+
+			// CRITICAL: Fetch the name if it's missing
+			if containerInfo.ContainerName == "" && containerInfo.ContainerID != "" {
+				name := d.containerDetector.GetContainerNameByID(containerInfo.ContainerID, containerInfo.Runtime)
+				if name != "" {
+					pyProc.ContainerInfo.ContainerName = strings.TrimPrefix(name, "/")
+				}
+			}
+		}
+	}
+
+	isSubProcess := strings.Contains(cmdline, "multiprocessing.spawn") ||
+		strings.Contains(cmdline, "resource_tracker")
+	if isSubProcess {
+		// Option A: Return nil to skip reporting these entirely
+		return nil, nil
+	}
+	// 1. Identify if this is a "Helper" or "Worker" process
+	isWorker := strings.Contains(pyProc.ProcessCommandLine, "multiprocessing.spawn")
+	isTracker := strings.Contains(pyProc.ProcessCommandLine, "multiprocessing.resource_tracker")
+
+	// 2. Extract service name with Parent awareness
+	d.extractPythonServiceName(pyProc, cmdArgs)
+
+	// 3. SERVICE NAME LINKING LOGIC
+	if isTracker {
+		// These are purely internal to Python; often best to skip or name generically
+		pyProc.ServiceName = "python-internal-tracker"
+	} else if isWorker {
+		// Try to find the parent's service name
+		parentProc, err := process.NewProcess(pyProc.ProcessParentPID)
+		if err == nil {
+			parentCmd, _ := parentProc.Cmdline()
+			parentArgs := d.parseCommandLine(parentCmd)
+
+			// Temporary PythonProcess to run discovery on parent
+			parentDummy := &PythonProcess{ProcessCommandLine: parentCmd}
+			d.extractPythonServiceName(parentDummy, parentArgs)
+
+			if parentDummy.ServiceName != "python-service" && parentDummy.ServiceName != "" {
+				// Link child to parent name
+				pyProc.ServiceName = parentDummy.ServiceName
+			}
+		}
+	}
+
+	// 1. Extract Entry Point & VirtualEnv
+	d.extractPythonInfo(pyProc, cmdArgs)
+
+	// 2. Extract Service Name (Logic similar to Node)
+	d.extractPythonServiceName(pyProc, cmdArgs)
+
+	// 3. Detect Framework/Manager (Gunicorn, Celery, etc.)
+	d.detectPythonProcessManager(pyProc, cmdArgs)
+
+	// 4. Detect Instrumentation
+	d.detectPythonInstrumentation(pyProc, cmdArgs)
+
+	return pyProc, nil
+}
+
+func (d *discoverer) extractPythonInfo(pyProc *PythonProcess, cmdArgs []string) {
+	// Detect Virtual Environment from Executable Path
+	if strings.Contains(pyProc.ProcessExecutablePath, "/bin/python") {
+		pyProc.VirtualEnvPath = filepath.Dir(filepath.Dir(pyProc.ProcessExecutablePath))
+	}
+
+	for i, arg := range cmdArgs {
+		if i == 0 || strings.HasPrefix(arg, "-") {
+			continue
+		}
+
+		// Strategy: Find the first .py file or a module name after -m
+		if strings.HasSuffix(arg, ".py") {
+			pyProc.EntryPoint = arg
+			if abs, err := filepath.Abs(arg); err == nil {
+				pyProc.WorkingDirectory = filepath.Dir(abs)
+			}
+			break
+		}
+
+		// If using python -m <module>
+		if i > 0 && cmdArgs[i-1] == "-m" {
+			pyProc.ModulePath = arg
+			break
+		}
+	}
+}
+
+func (d *discoverer) extractPythonServiceName(pyProc *PythonProcess, cmdArgs []string) {
+	if pyProc.ContainerInfo != nil && pyProc.ContainerInfo.IsContainer {
+		if pyProc.ContainerInfo.ContainerName != "" {
+			pyProc.ServiceName = pyProc.ContainerInfo.ContainerName
+			return
+		}
+	}
+	// Strategy 1: Uvicorn/Gunicorn Module Pattern (e.g., "main:app")
+	for _, arg := range cmdArgs {
+		if strings.Contains(arg, ":") {
+			// Check if previous arg was uvicorn/gunicorn or if the current arg is the 2nd/3rd
+			parts := strings.Split(arg, ":")
+			if len(parts) > 0 {
+				potentialName := parts[0]
+				// Avoid paths, just get the module name
+				if strings.Contains(potentialName, "/") {
+					potentialName = filepath.Base(potentialName)
+				}
+
+				if !d.isGenericPythonName(potentialName) {
+					pyProc.ServiceName = d.cleanServiceName(potentialName)
+					return
+				}
+			}
+		}
+	}
+
+	// Strategy 2: Project Directory Detection (Highly Accurate for your case)
+	// Looks for: /home/naman47/mw/apm/python/fastapi-bookstore-api/.env/bin/python3
+	for _, arg := range cmdArgs {
+		if strings.Contains(arg, "/.env/bin/") || strings.Contains(arg, "/venv/bin/") {
+			// Split at the virtualenv marker
+			pathParts := strings.Split(arg, "/.env/bin/")
+			if len(pathParts) == 1 {
+				pathParts = strings.Split(arg, "/venv/bin/")
+			}
+
+			// The directory immediately before .env is usually the project name
+			if len(pathParts) > 0 {
+				projectDir := filepath.Base(pathParts[0])
+				if !d.isGenericPythonName(projectDir) {
+					pyProc.ServiceName = projectDir
+					return
+				}
+			}
+		}
+	}
+
+	// Strategy 3: Uvicorn/Gunicorn Module name
+	// Looks for "main:app" and returns "main"
+	for _, arg := range cmdArgs {
+		if strings.Contains(arg, ":") && !strings.Contains(arg, "/") {
+			modulePart := strings.Split(arg, ":")[0]
+			if !d.isGenericPythonName(modulePart) {
+				pyProc.ServiceName = modulePart
+				return
+			}
+		}
+	}
+
+	pyProc.ServiceName = "python-service"
+
+	pyProc.ServiceName = "python-service"
+}
+
+func (d *discoverer) isGenericPythonName(name string) bool {
+	generics := []string{
+		"main", "app", "server", "index", "python", "python3",
+		"uvicorn", "gunicorn", "multiprocessing", "resource_tracker",
+	}
+	nameLower := strings.ToLower(name)
+	for _, g := range generics {
+		if nameLower == g || strings.HasPrefix(nameLower, "python3") {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *discoverer) detectPythonInstrumentation(pyProc *PythonProcess, cmdArgs []string) {
+	cmdline := strings.Join(cmdArgs, " ")
+
+	// Check for wrapper execution
+	if strings.Contains(cmdline, "opentelemetry-instrument") {
+		pyProc.HasPythonAgent = true
+	}
+
+	// Check environment for auto-instrumentation
+	environPath := fmt.Sprintf("/proc/%d/environ", pyProc.ProcessPID)
+	if data, err := os.ReadFile(environPath); err == nil {
+		if strings.Contains(string(data), "PYTHONPATH") && strings.Contains(string(data), "mw_bootstrap") {
+			pyProc.HasPythonAgent = true
+			pyProc.IsMiddlewareAgent = true
+		}
+	}
+}
+
+func (d *discoverer) passesPythonFilter(proc PythonProcess, filter ProcessFilter) bool {
+	if filter.CurrentUserOnly {
+		return proc.ProcessOwner == os.Getenv("USER")
+	}
+	return true
+}
+
 // RefreshProcess updates information for a specific process
 func (d *discoverer) RefreshProcess(ctx context.Context, pid int32) (*JavaProcess, error) {
 	proc, err := process.NewProcess(pid)
@@ -131,6 +448,69 @@ func (d *discoverer) filterNodeProcesses(processes []*process.Process) []*proces
 	}
 
 	return nodeProcesses
+}
+
+func (d *discoverer) filterPythonProcesses(processes []*process.Process) []*process.Process {
+	var pythonProcesses []*process.Process
+
+	for _, proc := range processes {
+		if d.isNodeProcess(proc) {
+			pythonProcesses = append(pythonProcesses, proc)
+		}
+	}
+
+	return pythonProcesses
+}
+
+func (d *discoverer) isPythonProcess(proc *process.Process) bool {
+	// 1. Check executable patterns
+	exe, err := proc.Exe()
+	if err == nil {
+		exeName := strings.ToLower(filepath.Base(exe))
+
+		// Check for standard python names (python, python3, python3.10, etc.)
+		if strings.HasPrefix(exeName, "python") || exeName == "pypy" || exeName == "pypy3" {
+			return true
+		}
+
+		// Check for common python-based entry point binaries
+		pyBinaries := []string{"gunicorn", "uvicorn", "celery", "flask", "django-admin"}
+		for _, bin := range pyBinaries {
+			if exeName == bin {
+				return true
+			}
+		}
+	}
+
+	// 2. Check command line for Python patterns
+	cmdline, err := proc.Cmdline()
+	if err == nil {
+		cmdLower := strings.ToLower(cmdline)
+
+		// Look for common execution patterns
+		pythonPatterns := []string{
+			"python ",
+			"python3 ",
+			"pip install",
+			"gunicorn ",
+			"uvicorn ",
+			"celery ",
+			"manage.py runserver",
+			"flask run",
+		}
+		for _, pattern := range pythonPatterns {
+			if strings.Contains(cmdLower, pattern) {
+				return true
+			}
+		}
+
+		// Check for .py files in the command line as a fallback
+		if strings.Contains(cmdLower, ".py") {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (d *discoverer) isNodeProcess(proc *process.Process) bool {
