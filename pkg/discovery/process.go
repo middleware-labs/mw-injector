@@ -201,10 +201,20 @@ func (d *discoverer) processOnePython(ctx context.Context, proc *process.Process
 
 	// Container Detection
 	if opts.IncludeContainerInfo {
-		if info, err := d.containerDetector.IsProcessInContainer(pid); err == nil {
-			pyProc.ContainerInfo = info
+		containerInfo, err := d.containerDetector.IsProcessInContainer(pyProc.ProcessPID)
+		if err == nil && containerInfo.IsContainer {
+			pyProc.ContainerInfo = containerInfo
+
+			// CRITICAL: Fetch the name if it's missing
+			if containerInfo.ContainerName == "" && containerInfo.ContainerID != "" {
+				name := d.containerDetector.GetContainerNameByID(containerInfo.ContainerID, containerInfo.Runtime)
+				if name != "" {
+					pyProc.ContainerInfo.ContainerName = strings.TrimPrefix(name, "/")
+				}
+			}
 		}
 	}
+
 	isSubProcess := strings.Contains(cmdline, "multiprocessing.spawn") ||
 		strings.Contains(cmdline, "resource_tracker")
 	if isSubProcess {
@@ -284,6 +294,12 @@ func (d *discoverer) extractPythonInfo(pyProc *PythonProcess, cmdArgs []string) 
 }
 
 func (d *discoverer) extractPythonServiceName(pyProc *PythonProcess, cmdArgs []string) {
+	if pyProc.ContainerInfo != nil && pyProc.ContainerInfo.IsContainer {
+		if pyProc.ContainerInfo.ContainerName != "" {
+			pyProc.ServiceName = pyProc.ContainerInfo.ContainerName
+			return
+		}
+	}
 	// Strategy 1: Uvicorn/Gunicorn Module Pattern (e.g., "main:app")
 	for _, arg := range cmdArgs {
 		if strings.Contains(arg, ":") {

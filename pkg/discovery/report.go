@@ -98,9 +98,10 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	}
 
 	pythonProcs, _ := FindAllPythonProcess(ctx)
-	pp.Println("All python procs: ", pythonProcs)
+	// pp.Println("All python procs: ", pythonProcs)
 	for _, proc := range pythonProcs {
 		setting := convertPythonProcessToServiceSetting(proc)
+		pp.Printf("%s: %v", setting.Key, setting)
 		settings[setting.Key] = setting
 	}
 	// Convert Java containers
@@ -167,16 +168,18 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 
 func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
 	// Generate a unique key for the service
+	pp.Println("Discovery proc: ", proc)
 	key := fmt.Sprintf("host-%d", proc.ProcessPID)
 
 	// Determine the service type based on process manager or environment
 	serviceType := "standalone"
-	if proc.IsGunicornProcess || proc.IsUvicornProcess {
+
+	if proc.IsInContainer() {
+		serviceType = "docker"
+	} else if proc.IsGunicornProcess || proc.IsUvicornProcess {
 		serviceType = "wsgi/asgi"
 	} else if proc.IsCeleryProcess {
 		serviceType = "worker"
-	} else if proc.IsInContainer() {
-		serviceType = "docker"
 	}
 
 	return ServiceSetting{
