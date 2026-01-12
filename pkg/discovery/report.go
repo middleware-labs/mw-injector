@@ -11,8 +11,6 @@ import (
 	"os"
 	"runtime"
 	"time"
-
-	"github.com/k0kubun/pp"
 )
 
 const apiPathForAgentSetting = "api/v1/agent/public/setting/"
@@ -95,7 +93,6 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	pythonProcs, _ := FindAllPythonProcess(ctx)
 	for _, proc := range pythonProcs {
 		setting := convertPythonProcessToServiceSetting(proc)
-		pp.Printf("%s: %v", setting.Key, setting)
 		settings[setting.Key] = setting
 	}
 
