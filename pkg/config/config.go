@@ -25,10 +25,9 @@ type ProcessConfiguration struct {
 	MWAPMCollectMetrics   bool `json:"mw_apm_collect_metrics" yaml:"MW_APM_COLLECT_METRICS"`
 
 	// Network settings
-	MWEnableGzip   bool   `json:"mw_enable_gzip" yaml:"MW_ENABLE_GZIP"`
-	MWAuthURL      string `json:"mw_auth_url" yaml:"MW_AUTH_URL"`
-	MWAgentService string `json:"mw_agent_service" yaml:"MW_AGENT_SERVICE"`
-	MWPropagators  string `json:"mw_propagators" yaml:"MW_PROPAGATORS"`
+	MWEnableGzip  bool   `json:"mw_enable_gzip" yaml:"MW_ENABLE_GZIP"`
+	MWAuthURL     string `json:"mw_auth_url" yaml:"MW_AUTH_URL"`
+	MWPropagators string `json:"mw_propagators" yaml:"MW_PROPAGATORS"`
 
 	// Profiling settings
 	MWProfilingServerURL string `json:"mw_profiling_server_url" yaml:"MW_PROFILING_SERVER_URL"`
@@ -70,7 +69,6 @@ func DefaultConfiguration() ProcessConfiguration {
 		MWAPMCollectMetrics:   true,
 		MWEnableGzip:          true,
 		MWAuthURL:             "https://app.middleware.io/api/v1/auth",
-		MWAgentService:        "localhost",
 		MWPropagators:         "b3",
 		MWProfilingAlloc:      "512k",
 		MWProfilingLock:       "10ms",
@@ -98,6 +96,7 @@ func (c *ProcessConfiguration) Validate() error {
 
 // ToEnvironmentVariables converts config to environment variable format
 func (c *ProcessConfiguration) ToEnvironmentVariables() map[string]string {
+
 	env := make(map[string]string)
 
 	// Required settings
@@ -120,9 +119,6 @@ func (c *ProcessConfiguration) ToEnvironmentVariables() map[string]string {
 	env["MW_ENABLE_GZIP"] = boolToString(c.MWEnableGzip)
 	if c.MWAuthURL != "" {
 		env["MW_AUTH_URL"] = c.MWAuthURL
-	}
-	if c.MWAgentService != "" {
-		env["MW_AGENT_SERVICE"] = c.MWAgentService
 	}
 
 	if c.OtelServiceName != "" {
@@ -154,7 +150,6 @@ func (c *ProcessConfiguration) ToEnvironmentVariables() map[string]string {
 	if c.MWDisableTelemetry {
 		env["MW_DISABLE_TELEMETRY"] = "true"
 	}
-
 	return env
 }
 

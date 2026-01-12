@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/config"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
 	"gopkg.in/yaml.v3"
@@ -1078,9 +1077,11 @@ func (cm *ComposeModifier) addNodeInstrumentation(
 	cfg *config.ProcessConfiguration,
 	hostAgentPath string,
 ) error {
-	cfg.MWServiceName = ""
+	// cfg.MWServiceName = ""
 	mwEnv := cfg.ToEnvironmentVariables()
-	nodeOptions := fmt.Sprintf("NODE_OPTIONS=--import ${PWD}/autoinstrumentation/mw-register.js")
+
+	// nodeOptions := fmt.Sprintf("NODE_OPTIONS=--import ${PWD}/autoinstrumentation/mw-register.js")
+	nodeOptions := "NODE_OPTIONS=--import /autoinstrumentation/mw-register.js"
 
 	// Remove any existing MW_ or OTEL_ or JAVA_TOOL_OPTIONS environment variables
 	var cleanedEnv []string
@@ -1097,7 +1098,6 @@ func (cm *ComposeModifier) addNodeInstrumentation(
 	for key, value := range mwEnv {
 		cleanedEnv = append(cleanedEnv, fmt.Sprintf("%s=%s", key, value))
 	}
-	pp.Println("CLEADED ENV: ", cleanedEnv)
 	service.Environment = cleanedEnv
 	// Add agent volume mount
 	agentMount := fmt.Sprintf("%s:%s:ro", hostAgentPath, "/autoinstrumentation")

@@ -627,7 +627,6 @@ func (d *discoverer) processWithWorkerPool(
 	go func() {
 		defer close(jobs)
 		for _, proc := range processes {
-			// pp.Println(proc)
 			select {
 			case jobs <- proc:
 			case <-ctx.Done():
