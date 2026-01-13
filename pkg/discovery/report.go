@@ -11,6 +11,8 @@ import (
 	"os"
 	"runtime"
 	"time"
+
+	"github.com/k0kubun/pp"
 )
 
 const apiPathForAgentSetting = "api/v1/agent/public/setting/"
@@ -73,7 +75,8 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	}
 
 	nodeProcs, err := FindAllNodeProcesses(ctx)
-
+	pp.Println("All node procs:")
+	// pp.Println(nodeProcs)
 	// --- 2. Convert to AgentReportValue (ServiceSetting) ---
 	osKey := runtime.GOOS
 	settings := map[string]ServiceSetting{}
@@ -95,9 +98,9 @@ func GetAgentReportValue() (AgentReportValue, error) {
 		setting := convertPythonProcessToServiceSetting(proc)
 		settings[setting.Key] = setting
 	}
-
 	for _, proc := range nodeProcs {
 		setting := convertNodeProcessToServiceSetting(proc)
+		pp.Println("node procs: ", proc)
 		settings[setting.Key] = setting
 	}
 
@@ -129,14 +132,26 @@ func convertJavaContainerToServiceSetting(container DockerContainer) ServiceSett
 }
 
 func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
-
+	// 1. Generate a stable Key
 	key := fmt.Sprintf("host-%d", proc.ProcessPID)
+	serviceType := "system"
+
+	// 2. Handle Container Infrastructure
+	if proc.IsInContainer() {
+		serviceType = "docker"
+		if proc.ContainerInfo.ContainerID != "" {
+			// Use Container ID for the key to prevent PID collisions
+			key = fmt.Sprintf("docker-node-%s", proc.ContainerInfo.ContainerID[:12])
+			proc.ServiceName = proc.ContainerInfo.ContainerName
+		}
+	}
+
 	return ServiceSetting{
-		PID:            0,
+		PID:            int(proc.ProcessPID),
 		ServiceName:    proc.ServiceName,
 		Status:         proc.Status,
 		Enabled:        true,
-		ServiceType:    "system",
+		ServiceType:    serviceType, // Now correctly reports "docker"
 		Language:       "node",
 		RuntimeVersion: proc.ProcessRuntimeVersion,
 		AgentPath:      proc.NodeAgentPath,
