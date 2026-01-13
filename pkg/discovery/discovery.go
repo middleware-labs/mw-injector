@@ -219,7 +219,7 @@ func FindAllJavaProcesses(ctx context.Context) ([]JavaProcess, error) {
 
 func FindAllNodeProcesses(ctx context.Context) ([]NodeProcess, error) {
 	opts := DefaultDiscoveryOptions()
-	opts.ExcludeContainers = true
+	opts.ExcludeContainers = false
 	opts.IncludeContainerInfo = true
 
 	discoverer := NewDiscoverer(ctx, opts)
