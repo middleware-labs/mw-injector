@@ -141,22 +141,21 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 			proc.ServiceName = proc.ContainerInfo.ContainerName
 		}
 	}
-
-	return ServiceSetting{
-		PID:               int(proc.ProcessPID),
-		ServiceName:       proc.ServiceName,
-		Owner:             proc.ProcessOwner,
-		Status:            proc.Status,
-		Enabled:           true,
-		ServiceType:       serviceType, // Now correctly reports "docker"
-		Language:          "node",
-		RuntimeVersion:    proc.ProcessRuntimeVersion,
-		HasAgent:          proc.HasNodeAgent,
-		IsMiddlewareAgent: proc.IsMiddlewareAgent,
-		AgentPath:         proc.NodeAgentPath,
-		Instrumented:      proc.HasNodeAgent,
-		Key:               key,
-	}
+  return ServiceSetting{
+      PID:               int(proc.ProcessPID),
+      ServiceName:       proc.ServiceName,
+      Owner:             proc.ProcessOwner,
+      Status:            proc.Status,
+      Enabled:           true,
+      ServiceType:       serviceType, // Now correctly reports "docker"
+      Language:          "node-js",
+      RuntimeVersion:    proc.ProcessRuntimeVersion,
+      HasAgent:          proc.HasNodeAgent,
+      IsMiddlewareAgent: proc.IsMiddlewareAgent,
+      AgentPath:         proc.NodeAgentPath,
+      Instrumented:      proc.HasNodeAgent,
+      Key:               key,
+    }
 }
 
 func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
