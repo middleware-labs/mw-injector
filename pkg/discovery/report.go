@@ -11,8 +11,6 @@ import (
 	"os"
 	"runtime"
 	"time"
-
-	"github.com/k0kubun/pp"
 )
 
 const apiPathForAgentSetting = "api/v1/agent/public/setting/"
@@ -75,7 +73,6 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	}
 
 	nodeProcs, err := FindAllNodeProcesses(ctx)
-	pp.Println("All node procs:")
 	// pp.Println(nodeProcs)
 	// --- 2. Convert to AgentReportValue (ServiceSetting) ---
 	osKey := runtime.GOOS
@@ -100,7 +97,6 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	}
 	for _, proc := range nodeProcs {
 		setting := convertNodeProcessToServiceSetting(proc)
-		pp.Println("node procs: ", proc)
 		settings[setting.Key] = setting
 	}
 
@@ -147,16 +143,19 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 	}
 
 	return ServiceSetting{
-		PID:            int(proc.ProcessPID),
-		ServiceName:    proc.ServiceName,
-		Status:         proc.Status,
-		Enabled:        true,
-		ServiceType:    serviceType, // Now correctly reports "docker"
-		Language:       "node",
-		RuntimeVersion: proc.ProcessRuntimeVersion,
-		AgentPath:      proc.NodeAgentPath,
-		Instrumented:   proc.HasNodeAgent,
-		Key:            key,
+		PID:               int(proc.ProcessPID),
+		ServiceName:       proc.ServiceName,
+		Owner:             proc.ProcessOwner,
+		Status:            proc.Status,
+		Enabled:           true,
+		ServiceType:       serviceType, // Now correctly reports "docker"
+		Language:          "node",
+		RuntimeVersion:    proc.ProcessRuntimeVersion,
+		HasAgent:          proc.HasNodeAgent,
+		IsMiddlewareAgent: proc.IsMiddlewareAgent,
+		AgentPath:         proc.NodeAgentPath,
+		Instrumented:      proc.HasNodeAgent,
+		Key:               key,
 	}
 }
 
