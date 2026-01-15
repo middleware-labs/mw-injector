@@ -147,6 +147,7 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 	}
 
 	return ServiceSetting{
+<<<<<<< Updated upstream
 		PID:            int(proc.ProcessPID),
 		ServiceName:    proc.ServiceName,
 		Status:         proc.Status,
@@ -157,6 +158,21 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 		AgentPath:      proc.NodeAgentPath,
 		Instrumented:   proc.HasNodeAgent,
 		Key:            key,
+=======
+		PID:               int(proc.ProcessPID),
+		ServiceName:       proc.ServiceName,
+		Owner:             proc.ProcessOwner,
+		Status:            proc.Status,
+		Enabled:           true,
+		ServiceType:       serviceType, // Now correctly reports "docker"
+		Language:          "node-js",
+		RuntimeVersion:    proc.ProcessRuntimeVersion,
+		HasAgent:          proc.HasNodeAgent,
+		IsMiddlewareAgent: proc.IsMiddlewareAgent,
+		AgentPath:         proc.NodeAgentPath,
+		Instrumented:      proc.HasNodeAgent,
+		Key:               key,
+>>>>>>> Stashed changes
 	}
 }
 
