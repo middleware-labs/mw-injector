@@ -294,82 +294,123 @@ func (d *discoverer) extractPythonInfo(pyProc *PythonProcess, cmdArgs []string) 
 }
 
 func (d *discoverer) extractPythonServiceName(pyProc *PythonProcess, cmdArgs []string) {
+	// --- Level 1: Explicit Environment (100% Confidence) ---
+	// Developers setting OTEL_SERVICE_NAME or SERVICE_NAME should always win.
+	if name := d.extractFromEnviron(pyProc.ProcessPID); name != "" {
+		pyProc.ServiceName = d.cleanServiceName(name)
+		return
+	}
+
+	// --- Level 2: Infrastructure (85% Confidence) ---
+	// If running in Docker/K8s, the container name is the primary identity.
 	if pyProc.ContainerInfo != nil && pyProc.ContainerInfo.IsContainer {
 		if pyProc.ContainerInfo.ContainerName != "" {
 			pyProc.ServiceName = pyProc.ContainerInfo.ContainerName
 			return
 		}
 	}
-	// Strategy 1: Uvicorn/Gunicorn Module Pattern (e.g., "main:app")
-	for _, arg := range cmdArgs {
-		if strings.Contains(arg, ":") {
-			// Check if previous arg was uvicorn/gunicorn or if the current arg is the 2nd/3rd
-			parts := strings.Split(arg, ":")
-			if len(parts) > 0 {
-				potentialName := parts[0]
-				// Avoid paths, just get the module name
-				if strings.Contains(potentialName, "/") {
-					potentialName = filepath.Base(potentialName)
-				}
 
-				if !d.isGenericPythonName(potentialName) {
-					pyProc.ServiceName = d.cleanServiceName(potentialName)
-					return
-				}
-			}
-		}
-	}
+	// --- Level 3: VirtualEnv Path Analysis (75% Confidence) ---
+	// Analyzing arguments for /project-name/.venv/bin/python
+	// This fixes the 'fastapi-bookstore-api' and 'flask-book-api' issues.
+	for _, arg := range pyProc.ProcessCommandArgs {
+		if strings.Contains(arg, "/.venv/") || strings.Contains(arg, "/venv/") || strings.Contains(arg, "/.env/") {
+			cleanPath := filepath.Clean(arg)
+			parts := strings.Split(cleanPath, string(os.PathSeparator))
 
-	// Strategy 2: Project Directory Detection (Highly Accurate for your case)
-	// Looks for: /home/naman47/mw/apm/python/fastapi-bookstore-api/.env/bin/python3
-	for _, arg := range cmdArgs {
-		if strings.Contains(arg, "/.env/bin/") || strings.Contains(arg, "/venv/bin/") {
-			// Split at the virtualenv marker
-			pathParts := strings.Split(arg, "/.env/bin/")
-			if len(pathParts) == 1 {
-				pathParts = strings.Split(arg, "/venv/bin/")
-			}
-
-			// The directory immediately before .env is usually the project name
-			if len(pathParts) > 0 {
-				projectDir := filepath.Base(pathParts[0])
-				if !d.isGenericPythonName(projectDir) {
-					pyProc.ServiceName = projectDir
-					return
+			for i, part := range parts {
+				if part == ".venv" || part == "venv" || part == ".env" {
+					// Use the directory name immediately preceding the venv folder
+					if i > 0 && !d.isGenericPythonName(parts[i-1]) {
+						pyProc.ServiceName = parts[i-1]
+						return
+					}
 				}
 			}
 		}
 	}
 
-	// Strategy 3: Uvicorn/Gunicorn Module name
-	// Looks for "main:app" and returns "main"
-	for _, arg := range cmdArgs {
+	// --- Level 4: Entry Point / Module Analysis (60% Confidence) ---
+	for i, arg := range cmdArgs {
+		// Case: uvicorn main:app (Module pattern) -> Extracts 'main'
 		if strings.Contains(arg, ":") && !strings.Contains(arg, "/") {
-			modulePart := strings.Split(arg, ":")[0]
-			if !d.isGenericPythonName(modulePart) {
-				pyProc.ServiceName = modulePart
+			modName := strings.Split(arg, ":")[0]
+			if !d.isGenericPythonName(modName) {
+				pyProc.ServiceName = modName
+				return
+			}
+		}
+		// Case: python /usr/bin/virt-manager (System script pattern) -> Extracts 'virt-manager'
+		if strings.HasSuffix(arg, ".py") || (i > 0 && !strings.HasPrefix(arg, "-") && strings.Contains(arg, "/")) {
+			baseName := filepath.Base(arg)
+			baseName = strings.TrimSuffix(baseName, ".py")
+			if !d.isGenericPythonName(baseName) {
+				pyProc.ServiceName = baseName
 				return
 			}
 		}
 	}
 
-	pyProc.ServiceName = "python-service"
+	// --- Level 5: Absolute Script Path Analysis (50% Confidence) ---
+	// If the script is 'app.py', we look at the folder it lives in.
+	if pyProc.EntryPoint != "" {
+		fullPath := pyProc.EntryPoint
+		if !filepath.IsAbs(fullPath) && pyProc.WorkingDirectory != "" {
+			fullPath = filepath.Join(pyProc.WorkingDirectory, fullPath)
+		}
 
+		// Resolve the directory name. Dir() on "/path/to/project/app.py" returns "/path/to/project"
+		parentDir := filepath.Dir(fullPath)
+		dirName := filepath.Base(parentDir)
+
+		if !d.isGenericPythonName(dirName) && dirName != "." && dirName != "/" {
+			pyProc.ServiceName = dirName
+			return
+		}
+	}
+
+	// --- Level 6: Working Directory Fallback (Lowest Confidence) ---
+	if pyProc.WorkingDirectory != "" {
+		dirName := filepath.Base(pyProc.WorkingDirectory)
+		if !d.isGenericPythonName(dirName) && dirName != "." && dirName != "/" {
+			pyProc.ServiceName = dirName
+			return
+		}
+	}
+
+	// Final Fallback
 	pyProc.ServiceName = "python-service"
 }
 
-func (d *discoverer) isGenericPythonName(name string) bool {
-	generics := []string{
-		"main", "app", "server", "index", "python", "python3",
-		"uvicorn", "gunicorn", "multiprocessing", "resource_tracker",
+func (d *discoverer) extractFromEnviron(pid int32) string {
+	path := fmt.Sprintf("/proc/%d/environ", pid)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
 	}
-	nameLower := strings.ToLower(name)
-	for _, g := range generics {
-		if nameLower == g || strings.HasPrefix(nameLower, "python3") {
-			return true
+
+	// Environment variables are null-byte separated in Linux
+	envVars := strings.Split(string(data), "\x00")
+	for _, env := range envVars {
+		if strings.HasPrefix(env, "OTEL_SERVICE_NAME=") ||
+			strings.HasPrefix(env, "SERVICE_NAME=") ||
+			strings.HasPrefix(env, "FLASK_APP=") {
+			parts := strings.Split(env, "=")
+			if len(parts) > 1 && parts[1] != "" {
+				return parts[1]
+			}
 		}
 	}
-	return false
+	return ""
+}
+
+func (d *discoverer) isGenericPythonName(name string) bool {
+	generics := map[string]bool{
+		"app": true, "main": true, "server": true, "index": true,
+		"python": true, "python3": true, "uvicorn": true, "gunicorn": true,
+		"bin": true, "src": true, "lib": true,
+	}
+	return generics[strings.ToLower(name)]
 }
 
 func (d *discoverer) detectPythonInstrumentation(pyProc *PythonProcess, cmdArgs []string) {
