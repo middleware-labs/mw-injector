@@ -107,7 +107,6 @@ func GetAgentReportValue() (AgentReportValue, error) {
 			AutoInstrumentationSettings: settings,
 		},
 	}
-
 	return reportValue, nil
 }
 
@@ -164,7 +163,7 @@ func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
 	key := fmt.Sprintf("host-%d", proc.ProcessPID)
 
 	// Determine the service type based on process manager or environment
-	serviceType := "standalone"
+	serviceType := "system"
 
 	if proc.IsInContainer() {
 		serviceType = "docker"
