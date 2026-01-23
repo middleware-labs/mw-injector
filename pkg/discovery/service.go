@@ -1,62 +1,104 @@
 package discovery
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 )
 
-// extractServiceName extracts a meaningful service name from command arguments
 func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string) {
-	serviceName := ""
-	if javaProc.IsInContainer() {
+	// --- Level 1: Infrastructure (Container) ---
+	if javaProc.IsInContainer() && javaProc.ContainerInfo.ContainerName != "" {
 		javaProc.ServiceName = javaProc.ContainerInfo.ContainerName
 		return
 	}
 
-	// Strategy 1: System Properties (highest priority)
-	serviceName = d.extractFromSystemProperties(cmdArgs)
-	if serviceName != "" {
-		javaProc.ServiceName = serviceName
+	// --- Level 2: Explicit Environment (OTel Standards) ---
+	// Check /proc/PID/environ for OTEL_SERVICE_NAME
+	if envName := d.extractFromEnviron(javaProc.ProcessPID); envName != "" {
+		javaProc.ServiceName = d.cleanServiceName(envName)
 		return
 	}
 
-	// Strategy 2: JAR file name
+	// --- Level 3: Systemd Unit Name (High Confidence for Host) ---
+	// NEW: If it's a systemd service, use the unit name!
+	if unitName := d.extractSystemdUnitName(javaProc.ProcessPID); unitName != "" {
+		javaProc.ServiceName = d.cleanServiceName(unitName)
+		return
+	}
+
+	// --- Level 4: Java System Properties (-Dservice.name, etc.) ---
+	if propName := d.extractFromSystemProperties(cmdArgs); propName != "" {
+		javaProc.ServiceName = propName
+		return
+	}
+
+	// --- Level 5: Application Identity (JAR/Main Class) ---
 	if javaProc.JarFile != "" {
-		serviceName = d.extractFromJarName(javaProc.JarFile)
-		if serviceName != "" {
-			javaProc.ServiceName = serviceName
+		name := d.extractFromJarName(javaProc.JarFile)
+		if !d.isGenericJavaName(name) {
+			javaProc.ServiceName = name
 			return
 		}
 	}
 
-	// Strategy 3: Directory structure
-	if javaProc.JarPath != "" {
-		serviceName = d.extractFromDirectory(javaProc.JarPath)
-		if serviceName != "" {
-			javaProc.ServiceName = serviceName
-			return
-		}
-	}
-
-	// Strategy 4: Main class name
 	if javaProc.MainClass != "" {
-		serviceName = d.extractFromMainClass(javaProc.MainClass)
-		if serviceName != "" {
-			javaProc.ServiceName = serviceName
+		name := d.extractFromMainClass(javaProc.MainClass)
+		if !d.isGenericJavaName(name) {
+			javaProc.ServiceName = name
 			return
 		}
 	}
 
-	// Strategy 5: Fallback to process name
-	serviceName = d.extractFromProcessName(javaProc.ProcessExecutableName)
-	if serviceName != "" {
-		javaProc.ServiceName = serviceName
-		return
+	// --- Level 6: Directory structure (Last Resort) ---
+	if javaProc.JarPath != "" {
+		name := d.extractFromDirectory(javaProc.JarPath)
+		if !d.isGenericJavaName(name) {
+			javaProc.ServiceName = name
+			return
+		}
 	}
 
-	// Final fallback
 	javaProc.ServiceName = "java-service"
+}
+
+func (d *discoverer) extractSystemdUnitName(pid int32) string {
+	path := fmt.Sprintf("/proc/%d/cgroup", pid)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		// Look for any line containing ".service"
+		if strings.Contains(line, ".service") {
+			// Split by '/' to get the last part: e.g., "book-service-java.service"
+			parts := strings.Split(line, "/")
+			unit := parts[len(parts)-1]
+
+			// In some cgroup v2 formats, it might look like "book.service/some-sub-task"
+			// So we take the first part of that specific segment
+			if strings.Contains(unit, ".service") {
+				unitParts := strings.Split(unit, ".service")
+				// Return the name before ".service"
+				return unitParts[0]
+			}
+		}
+	}
+	return ""
+}
+
+func (d *discoverer) isGenericJavaName(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	generics := map[string]bool{
+		"bin": true, "lib": true, "src": true, "target": true,
+		"java": true, "jre": true, "jdk": true, "app": true,
+		"main": true, "server": true, "tomcat": true,
+	}
+	return generics[name] || name == "." || name == ""
 }
 
 // extractFromSystemProperties looks for service name in JVM system properties

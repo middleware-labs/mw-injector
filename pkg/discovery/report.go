@@ -73,7 +73,6 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	}
 
 	nodeProcs, err := FindAllNodeProcesses(ctx)
-	// pp.Println(nodeProcs)
 	// --- 2. Convert to AgentReportValue (ServiceSetting) ---
 	osKey := runtime.GOOS
 	settings := map[string]ServiceSetting{}
