@@ -82,7 +82,7 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	// Simple call. No arguments.
 	// It automatically removes any process not seen in the last 10 minutes.
 	PruneProcessCache()
-
+	PruneContainerNameCache()
 	// Debug Stats (You can remove this later)
 	fmt.Println(ReportCacheStats())
 

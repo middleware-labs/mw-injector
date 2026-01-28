@@ -18,9 +18,7 @@ type ProcessCacheEntry struct {
 	Owner             string
 	ContainerInfo     *ContainerInfo
 	Ignore            bool
-
-	// NEW: Simple timestamp
-	LastSeen int64
+	LastSeen          int64
 }
 
 type ProcessMetadataCache struct {

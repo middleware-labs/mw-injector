@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/k0kubun/pp"
 )
@@ -22,10 +23,15 @@ type ContainerInfo struct {
 	Runtime       string `json:"runtime,omitempty"` // docker, podman, containerd, etc.
 }
 
+type containerNameEntry struct {
+	Name     string
+	LastSeen int64
+}
+
 var (
 	// Global cache specifically for ID -> Name resolution.
 	// This survives across different execution cycles of the discovery agent.
-	globalNameCache = make(map[string]string)
+	globalNameCache = make(map[string]containerNameEntry)
 	globalNameMu    sync.RWMutex
 
 	globalCacheHits   atomic.Int64
@@ -33,14 +39,19 @@ var (
 )
 
 func getCachedContainerName(id string) (string, bool) {
-	globalNameMu.RLock()
-	defer globalNameMu.RUnlock()
+	globalNameMu.Lock() // Needs Write Lock to update LastSeen
+	defer globalNameMu.Unlock()
 
-	name, exists := globalNameCache[id]
+	entry, exists := globalNameCache[id]
 	if exists {
+		// Update timestamp to keep it alive (LRU style)
+		entry.LastSeen = time.Now().Unix()
+		globalNameCache[id] = entry
+
 		globalCacheHits.Add(1)
+		return entry.Name, true
 	}
-	return name, exists
+	return "", false
 }
 
 func cacheContainerName(id, name string) {
@@ -50,7 +61,25 @@ func cacheContainerName(id, name string) {
 	globalNameMu.Lock()
 	defer globalNameMu.Unlock()
 
-	globalNameCache[id] = name
+	globalNameCache[id] = containerNameEntry{
+		Name:     name,
+		LastSeen: time.Now().Unix(),
+	}
+}
+
+// PruneContainerNameCache removes container names not used in the last 20 minutes
+func PruneContainerNameCache() {
+	globalNameMu.Lock()
+	defer globalNameMu.Unlock()
+
+	// 20 minute TTL (adjust as needed)
+	threshold := time.Now().Add(-20 * time.Minute).Unix()
+
+	for id, entry := range globalNameCache {
+		if entry.LastSeen < threshold {
+			delete(globalNameCache, id)
+		}
+	}
 }
 
 func PrintContainerCacheStats() {
