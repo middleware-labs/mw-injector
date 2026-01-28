@@ -176,12 +176,64 @@ func (d *discoverer) pythonWorker(ctx context.Context, jobs <-chan *process.Proc
 }
 
 func (d *discoverer) processOnePython(ctx context.Context, proc *process.Process, opts DiscoveryOptions) (*PythonProcess, error) {
+	// 1. FAST IDENTIFICATION (PID + CreateTime)
 	pid := proc.Pid
+	createTime, err := proc.CreateTime()
+	if err != nil {
+		return nil, nil // Process likely gone
+	}
+	alignedTime := (createTime / 1000) * 1000
+	// 2. CACHE CHECK (The Fast Path)
+	// If we have seen this exact process instance before, skip ALL heavy work.
+	if cached, hit := GetCachedProcessMetadata(pid, alignedTime); hit {
+		// --- Check if we previously decided to ignore this process ---
+		if cached.Ignore {
+			return nil, nil
+		}
+
+		// Fetch only dynamic fields that change (Status)
+		// We avoid fetching Cmdline/Exe if not strictly needed, or fetch them cheap.
+		status, _ := proc.Status()
+		exe, _ := proc.Exe()
+		cmdline, _ := proc.Cmdline()
+		parentPID, _ := proc.Ppid()
+
+		return &PythonProcess{
+			ProcessPID:            pid,
+			ProcessParentPID:      parentPID,
+			ProcessExecutablePath: exe,
+			ProcessExecutableName: filepath.Base(exe),
+			ProcessCommandLine:    cmdline,
+			// ProcessCommandArgs: d.parseCommandLine(cmdline), // Skip parsing in fast path if unused
+			ProcessOwner:      cached.Owner, // Use cached owner to avoid lookup syscalls
+			ProcessCreateTime: time.Unix(createTime/1000, 0),
+			Status:            strings.Join(status, ","),
+
+			// --- CACHED METADATA (High ROI) ---
+			ServiceName:           cached.ServiceName,
+			ProcessManager:        cached.ServiceType, // Map cached ServiceType -> ProcessManager
+			ProcessRuntimeVersion: cached.RuntimeVersion,
+			EntryPoint:            cached.EntryPoint,
+			HasPythonAgent:        cached.HasAgent,
+			IsMiddlewareAgent:     cached.IsMiddlewareAgent,
+			PythonAgentPath:       cached.AgentPath,
+			ContainerInfo:         cached.ContainerInfo, // Pre-resolved container info (includes Name!)
+
+			// Constants
+			ProcessRuntimeName:        "python",
+			ProcessRuntimeDescription: "Python Interpreter",
+		}, nil
+	}
+
+	// ==================================================================================
+	// 3. SLOW PATH (Cache Miss) - Original Logic
+	// ==================================================================================
+
 	cmdline, _ := proc.Cmdline()
 	exe, _ := proc.Exe()
 	parentPID, _ := proc.Ppid()
 	owner, _ := d.getProcessOwner(proc)
-	createTime, _ := proc.CreateTime()
+	// createTime already fetched above
 	status, _ := proc.Status()
 	cmdArgs := d.parseCommandLine(cmdline)
 
@@ -206,6 +258,7 @@ func (d *discoverer) processOnePython(ctx context.Context, proc *process.Process
 			pyProc.ContainerInfo = containerInfo
 
 			// CRITICAL: Fetch the name if it's missing
+			// Note: GetContainerNameByID now checks the global name cache internally!
 			if containerInfo.ContainerName == "" && containerInfo.ContainerID != "" {
 				name := d.containerDetector.GetContainerNameByID(containerInfo.ContainerID, containerInfo.Runtime)
 				if name != "" {
@@ -218,6 +271,11 @@ func (d *discoverer) processOnePython(ctx context.Context, proc *process.Process
 	isSubProcess := strings.Contains(cmdline, "multiprocessing.spawn") ||
 		strings.Contains(cmdline, "resource_tracker")
 	if isSubProcess {
+		// Also cache the rejection
+		CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{
+			Ignore: true,
+			Owner:  owner, // Optional: Cache owner just in case
+		})
 		// Option A: Return nil to skip reporting these entirely
 		return nil, nil
 	}
@@ -261,6 +319,23 @@ func (d *discoverer) processOnePython(ctx context.Context, proc *process.Process
 
 	// 4. Detect Instrumentation
 	d.detectPythonInstrumentation(pyProc, cmdArgs)
+
+	// ==================================================================================
+	// 4. POPULATE CACHE
+	// ==================================================================================
+
+	// Ensure we added Owner and ContainerInfo to your ProcessCacheEntry struct definition!
+	CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{
+		ServiceName:       pyProc.ServiceName,
+		ServiceType:       pyProc.ProcessManager,
+		RuntimeVersion:    pyProc.ProcessRuntimeVersion,
+		EntryPoint:        pyProc.EntryPoint,
+		HasAgent:          pyProc.HasPythonAgent,
+		IsMiddlewareAgent: pyProc.IsMiddlewareAgent,
+		AgentPath:         pyProc.PythonAgentPath,
+		ContainerInfo:     pyProc.ContainerInfo, // Save the pointer containing the resolved Name
+		Owner:             pyProc.ProcessOwner,  // Save owner to avoid future lookup syscalls
+	})
 
 	return pyProc, nil
 }
@@ -805,8 +880,65 @@ func (d *discoverer) nodeWorker(ctx context.Context, jobs <-chan *process.Proces
 
 // processOneNode processes a single Node.js process
 func (d *discoverer) processOneNode(ctx context.Context, proc *process.Process, opts DiscoveryOptions) (*NodeProcess, error) {
-	// Get basic process information
+	// 1. FAST IDENTIFICATION (PID + CreateTime)
 	pid := proc.Pid
+	createTime, err := proc.CreateTime()
+	if err != nil {
+		return nil, nil // Process likely gone
+	}
+
+	alignedTime := (createTime / 1000) * 1000
+	// 2. CACHE CHECK (The Fast Path)
+	// If we have seen this exact process instance before, skip expensive file reads.
+	if cached, hit := GetCachedProcessMetadata(pid, alignedTime); hit {
+		// Check if we previously decided to ignore this process ---
+		if cached.Ignore {
+			return nil, nil
+		}
+		// Fetch minimal dynamic data
+		status, _ := proc.Status()
+		exe, _ := proc.Exe()
+		cmdline, _ := proc.Cmdline()
+		parentPID, _ := proc.Ppid()
+
+		return &NodeProcess{
+			ProcessPID:            pid,
+			ProcessParentPID:      parentPID,
+			ProcessExecutableName: filepath.Base(exe),
+			ProcessExecutablePath: exe,
+			ProcessCommand:        cmdline,
+			ProcessCommandLine:    cmdline,
+			ProcessOwner:          cached.Owner, // Uses cached Owner
+			ProcessCreateTime:     time.Unix(createTime/1000, 0),
+			Status:                strings.Join(status, ","),
+
+			// --- CACHED METADATA (High ROI) ---
+			ServiceName:           cached.ServiceName,
+			ProcessRuntimeVersion: cached.RuntimeVersion,
+
+			// Node Specifics
+			EntryPoint:        cached.EntryPoint,
+			HasNodeAgent:      cached.HasAgent,
+			IsMiddlewareAgent: cached.IsMiddlewareAgent,
+			NodeAgentPath:     cached.AgentPath,
+
+			// Re-hydrate Process Manager flags from cached ServiceType
+			ProcessManager:   cached.ServiceType,
+			IsPM2Process:     cached.ServiceType == "pm2",
+			IsForeverProcess: cached.ServiceType == "forever",
+
+			// Container Info (Pre-resolved Name)
+			ContainerInfo: cached.ContainerInfo,
+
+			// Constants
+			ProcessRuntimeName:        "node",
+			ProcessRuntimeDescription: "Node.js Runtime",
+		}, nil
+	}
+
+	// ==================================================================================
+	// 3. SLOW PATH (Cache Miss) - Original Logic
+	// ==================================================================================
 
 	cmdline, err := proc.Cmdline()
 	if err != nil {
@@ -815,53 +947,33 @@ func (d *discoverer) processOneNode(ctx context.Context, proc *process.Process, 
 
 	exe, err := proc.Exe()
 	if err != nil {
-		// Use fallback if exe is not accessible
 		exe = "node"
 	}
 
-	// Get parent PID
-	parentPID, err := proc.Ppid()
+	parentPID, _ := proc.Ppid()
 	if err != nil {
 		parentPID = 0
 	}
 
-	// Get process owner
-	owner, err := d.getProcessOwner(proc)
-	if err != nil {
-		owner = "unknown"
-	}
+	// Use internal user cache for the "slow path" (intra-scan)
+	owner, _ := d.getProcessOwner(proc)
 
-	// Get process create time
-	createTime, err := proc.CreateTime()
-	if err != nil {
-		createTime = 0
-	}
-	createTimeStamp := time.Unix(createTime/1000, 0)
-
-	// Get process status
-	status, err := proc.Status()
-	if err != nil {
-		status = []string{"unknown"}
-	}
+	status, _ := proc.Status()
 	statusStr := strings.Join(status, ",")
 
-	// Parse command line arguments
 	cmdArgs := d.parseCommandLine(cmdline)
 
-	// Initialize the Node.js process structure
 	nodeProc := &NodeProcess{
-		ProcessPID:            pid,
-		ProcessParentPID:      parentPID,
-		ProcessExecutableName: d.getExecutableName(exe),
-		ProcessExecutablePath: exe,
-		ProcessCommand:        cmdline,
-		ProcessCommandLine:    cmdline,
-		ProcessCommandArgs:    cmdArgs,
-		ProcessOwner:          owner,
-		ProcessCreateTime:     createTimeStamp,
-		Status:                statusStr,
-
-		// Node.js runtime information
+		ProcessPID:                pid,
+		ProcessParentPID:          parentPID,
+		ProcessExecutableName:     d.getExecutableName(exe),
+		ProcessExecutablePath:     exe,
+		ProcessCommand:            cmdline,
+		ProcessCommandLine:        cmdline,
+		ProcessCommandArgs:        cmdArgs,
+		ProcessOwner:              owner,
+		ProcessCreateTime:         time.Unix(createTime/1000, 0),
+		Status:                    statusStr,
 		ProcessRuntimeName:        "node",
 		ProcessRuntimeVersion:     d.extractNodeVersion(cmdArgs),
 		ProcessRuntimeDescription: "Node.js Runtime",
@@ -871,7 +983,7 @@ func (d *discoverer) processOneNode(ctx context.Context, proc *process.Process, 
 	if opts.IncludeContainerInfo || opts.ExcludeContainers {
 		containerInfo, err := d.containerDetector.IsProcessInContainer(nodeProc.ProcessPID)
 		if err != nil {
-			fmt.Printf("Warning: Could not detect container info for Node.js PID %d: %v\n", nodeProc.ProcessPID, err)
+			// fmt.Printf("Warning: Could not detect container info for Node.js PID %d: %v\n", nodeProc.ProcessPID, err)
 		} else {
 			nodeProc.ContainerInfo = containerInfo
 
@@ -881,6 +993,7 @@ func (d *discoverer) processOneNode(ctx context.Context, proc *process.Process, 
 			}
 
 			// If container name is available, try to get it
+			// Note: GetContainerNameByID now checks the GLOBAL name cache internally!
 			if containerInfo.IsContainer && containerInfo.ContainerID != "" {
 				containerName := d.containerDetector.GetContainerNameByID(
 					containerInfo.ContainerID,
@@ -893,7 +1006,7 @@ func (d *discoverer) processOneNode(ctx context.Context, proc *process.Process, 
 		}
 	}
 
-	// Extract Node.js-specific information
+	// Extract Node.js-specific information (Expensive: reads package.json)
 	d.extractNodeInfo(nodeProc, cmdArgs)
 
 	// Extract service name
@@ -905,13 +1018,23 @@ func (d *discoverer) processOneNode(ctx context.Context, proc *process.Process, 
 	// Detect instrumentation
 	d.detectNodeInstrumentation(nodeProc, cmdArgs)
 
-	// Get metrics if requested
-	// if opts.IncludeMetrics {
-	// 	d.addMetrics(proc, &javaProc) // Reuse metrics from Java process
-	// 	// Copy metrics to NodeProcess
-	// 	nodeProc.MemoryPercent = javaProc.MemoryPercent
-	// 	nodeProc.CPUPercent = javaProc.CPUPercent
-	// }
+	// ==================================================================================
+	// 4. POPULATE CACHE
+	// ==================================================================================
+	// DEBUG PRINT
+	key := makeProcessKey(int32(pid), alignedTime)
+	fmt.Printf("DEBUG SAVE Key: %s | PID: %d | Time: %d\n", key, pid, alignedTime)
+	CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{
+		ServiceName:       nodeProc.ServiceName,
+		ServiceType:       nodeProc.ProcessManager, // e.g. "pm2", "forever", "systemd"
+		RuntimeVersion:    nodeProc.ProcessRuntimeVersion,
+		EntryPoint:        nodeProc.EntryPoint,
+		HasAgent:          nodeProc.HasNodeAgent,
+		IsMiddlewareAgent: nodeProc.IsMiddlewareAgent,
+		AgentPath:         nodeProc.NodeAgentPath,
+		ContainerInfo:     nodeProc.ContainerInfo, // Save the full pointer
+		Owner:             nodeProc.ProcessOwner,  // Save owner string
+	})
 
 	return nodeProc, nil
 }

@@ -9,6 +9,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+
+	"github.com/k0kubun/pp"
 )
 
 // ContainerInfo holds information about a process running in a container
@@ -17,6 +20,51 @@ type ContainerInfo struct {
 	ContainerID   string `json:"container_id,omitempty"`
 	ContainerName string `json:"container_name,omitempty"`
 	Runtime       string `json:"runtime,omitempty"` // docker, podman, containerd, etc.
+}
+
+var (
+	// Global cache specifically for ID -> Name resolution.
+	// This survives across different execution cycles of the discovery agent.
+	globalNameCache = make(map[string]string)
+	globalNameMu    sync.RWMutex
+
+	globalCacheHits   atomic.Int64
+	globalCacheMisses atomic.Int64
+)
+
+func getCachedContainerName(id string) (string, bool) {
+	globalNameMu.RLock()
+	defer globalNameMu.RUnlock()
+
+	name, exists := globalNameCache[id]
+	if exists {
+		globalCacheHits.Add(1)
+	}
+	return name, exists
+}
+
+func cacheContainerName(id, name string) {
+	if id == "" || name == "" {
+		return
+	}
+	globalNameMu.Lock()
+	defer globalNameMu.Unlock()
+
+	globalNameCache[id] = name
+}
+
+func PrintContainerCacheStats() {
+	hits := globalCacheHits.Load()
+	misses := globalCacheMisses.Load()
+	total := hits + misses
+
+	if total == 0 {
+		return
+	}
+
+	efficiency := float64(hits) / float64(total) * 100
+	pp.Printf("\n[Container Cache Stats] Hits: %v | Misses: %v | Efficiency: %v\n",
+		hits, misses, efficiency)
 }
 
 // ContainerDetector provides methods to detect if a process is running in a container
@@ -366,16 +414,30 @@ func (cd *ContainerDetector) GetContainerNameByID(containerID, runtime string) s
 		return ""
 	}
 
+	// 1. Check Global Cache (Fastest)
+	if name, hit := getCachedContainerName(containerID); hit {
+		return name
+	}
+
+	globalCacheMisses.Add(1)
+
+	var name string
 	switch runtime {
 	case "docker":
-		return cd.getDockerContainerName(containerID)
+		name = cd.getDockerContainerName(containerID)
 	case "docker/containerd":
-		return cd.getDockerContainerName(containerID)
+		name = cd.getDockerContainerName(containerID)
 	case "podman":
-		return cd.getPodmanContainerName(containerID)
+		name = cd.getPodmanContainerName(containerID)
 	default:
-		return ""
+		name = ""
 	}
+
+	if name != "" {
+		cacheContainerName(containerID, name)
+	}
+
+	return name
 }
 
 // getDockerContainerName gets Docker container name by ID
