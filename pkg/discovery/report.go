@@ -83,8 +83,6 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	// It automatically removes any process not seen in the last 10 minutes.
 	PruneProcessCache()
 	PruneContainerNameCache()
-	// Debug Stats (You can remove this later)
-	fmt.Println(ReportCacheStats())
 
 	// --- 3. Convert to AgentReportValue (Reporting) ---
 	osKey := runtime.GOOS

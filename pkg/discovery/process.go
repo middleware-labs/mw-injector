@@ -1021,9 +1021,6 @@ func (d *discoverer) processOneNode(ctx context.Context, proc *process.Process, 
 	// ==================================================================================
 	// 4. POPULATE CACHE
 	// ==================================================================================
-	// DEBUG PRINT
-	key := makeProcessKey(int32(pid), alignedTime)
-	fmt.Printf("DEBUG SAVE Key: %s | PID: %d | Time: %d\n", key, pid, alignedTime)
 	CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{
 		ServiceName:       nodeProc.ServiceName,
 		ServiceType:       nodeProc.ProcessManager, // e.g. "pm2", "forever", "systemd"
