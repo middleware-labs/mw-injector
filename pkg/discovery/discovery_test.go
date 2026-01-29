@@ -30,7 +30,10 @@ func TestDefaultDiscoveryOptions(t *testing.T) {
 
 func TestNewDiscoverer(t *testing.T) {
 	ctx := context.Background()
-	discoverer := discovery.NewDiscoverer(ctx)
+	discoverer, err := discovery.NewDiscoverer(ctx, discovery.DiscoveryOptions{})
+	if err != nil {
+		t.Errorf("error in finding all python processes, \n %v", err)
+	}
 
 	if discoverer == nil {
 		t.Fatal("NewDiscoverer returned nil")

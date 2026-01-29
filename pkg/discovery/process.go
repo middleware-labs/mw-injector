@@ -32,6 +32,7 @@ type discoverer struct {
 	opts              DiscoveryOptions
 	containerDetector *ContainerDetector
 	userCache         sync.Map
+	allProcesses      []*process.Process
 }
 
 // DiscoverJavaProcesses finds all Java processes with default options
@@ -48,17 +49,11 @@ func (d *discoverer) DiscoverWithOptions(ctx context.Context, opts DiscoveryOpti
 		defer cancel()
 	}
 
-	// Get all processes
-	allProcesses, err := process.Processes()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get process list: %w", err)
-	}
-
 	// Filter for Java processes first to reduce workload
 	// javaDiscoverCandidates := d.filterJavaProcesses(allProcesses)
 
 	// Process concurrently with worker pool
-	return d.processWithWorkerPool(ctx, allProcesses, opts)
+	return d.processWithWorkerPool(ctx, d.allProcesses, opts)
 }
 
 func (d *discoverer) DiscoverNodeWithOptions(
@@ -71,12 +66,7 @@ func (d *discoverer) DiscoverNodeWithOptions(
 		defer cancel()
 	}
 
-	allProcesses, err := process.Processes()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get process list: %w", err)
-	}
-
-	nodeProcesses := d.filterNodeProcesses(allProcesses)
+	nodeProcesses := d.filterNodeProcesses(d.allProcesses)
 	return d.processNodeWithWorkerPool(ctx, nodeProcesses, opts)
 }
 
@@ -87,14 +77,9 @@ func (d *discoverer) DiscoverPythonWithOptions(ctx context.Context, opts Discove
 		defer cancel()
 	}
 
-	allProcesses, err := process.Processes()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get process list: %w", err)
-	}
-
 	// Filter for Python processes first
 	var pythonCandidates []*process.Process
-	for _, proc := range allProcesses {
+	for _, proc := range d.allProcesses {
 		if d.isPythonProcess(proc) {
 			pythonCandidates = append(pythonCandidates, proc)
 		}
@@ -1640,7 +1625,10 @@ func FindContainerJavaProcesses(ctx context.Context) ([]JavaProcess, error) {
 	opts.ExcludeContainers = false
 	opts.IncludeContainerInfo = true
 
-	discoverer := NewDiscovererWithOptions(ctx, opts)
+	discoverer, err := NewDiscovererWithOptions(ctx, opts)
+	if err != nil {
+		return nil, fmt.Errorf("error in finding container java processes, \n", err)
+	}
 	defer discoverer.Close()
 
 	allProcesses, err := discoverer.DiscoverWithOptions(ctx, opts)
