@@ -47,13 +47,6 @@ type OSConfig struct {
 // AgentReportValue is the root structure for the 'value' field's JSON content.
 type AgentReportValue map[string]OSConfig
 
-// type Metadata struct {
-// 	AgentSetting  string
-// 	Platform      string
-// 	InfraPlatform string
-// 	// ColRunning    *otelcol.Collector
-// }
-
 type AgentSettingPayload struct {
 	Value    string                            `json:"value"` // Base64 encoded config
 	MetaData map[string]interface{}            `json:"meta_data"`
@@ -61,39 +54,55 @@ type AgentSettingPayload struct {
 }
 
 func GetAgentReportValue() (AgentReportValue, error) {
-
 	// --- 1. Perform Process Discovery ---
 	ctx := context.Background()
 
 	// a) Host Processes (Java)
+	// Java has its own optimization from your previous PR
 	processes, err := FindAllJavaProcesses(ctx)
 	if err != nil {
-		// c.logger.Error("Failed to discover host Java processes", zap.Error(err))
-		// Decide if this should be a fatal error or just logged (assuming logged for now)
+		fmt.Printf("Error discovering Java processes: %v\n", err)
 	}
 
+	// b) Node Processes
+	// Internally calls GetCachedProcessMetadata -> Updates LastSeen timestamp
 	nodeProcs, err := FindAllNodeProcesses(ctx)
-	// --- 2. Convert to AgentReportValue (ServiceSetting) ---
+	if err != nil {
+		fmt.Printf("Error discovering Node processes: %v\n", err)
+	}
+
+	// c) Python Processes
+	// Internally calls GetCachedProcessMetadata -> Updates LastSeen timestamp
+	pythonProcs, err := FindAllPythonProcess(ctx)
+	if err != nil {
+		fmt.Printf("Error discovering Python processes: %v\n", err)
+	}
+
+	// --- 2. SWEEP (Garbage Collection) ---
+	// Simple call. No arguments.
+	// It automatically removes any process not seen in the last 10 minutes.
+	PruneProcessCache()
+	PruneContainerNameCache()
+
+	// --- 3. Convert to AgentReportValue (Reporting) ---
 	osKey := runtime.GOOS
 	settings := map[string]ServiceSetting{}
 
-	// Convert host processes
+	// Convert Java
 	for _, proc := range processes {
-		// Only report processes we care about (non-Tomcat, non-Container for simplicity)
-		// if !proc.IsTomcat() && !proc.ContainerInfo.IsContainer {
 		if !proc.IsTomcat() {
-			if proc.IsInContainer() {
-			}
 			setting := convertJavaProcessToServiceSetting(proc)
 			settings[setting.Key] = setting
 		}
 	}
 
-	pythonProcs, _ := FindAllPythonProcess(ctx)
+	// Convert Python
 	for _, proc := range pythonProcs {
 		setting := convertPythonProcessToServiceSetting(proc)
 		settings[setting.Key] = setting
 	}
+
+	// Convert Node
 	for _, proc := range nodeProcs {
 		setting := convertNodeProcessToServiceSetting(proc)
 		settings[setting.Key] = setting
@@ -106,13 +115,13 @@ func GetAgentReportValue() (AgentReportValue, error) {
 			AutoInstrumentationSettings: settings,
 		},
 	}
+
 	return reportValue, nil
 }
 
 // Placeholder for logic that converts discovery.Container to ServiceSetting
 func convertJavaContainerToServiceSetting(container DockerContainer) ServiceSetting {
 	// Generate a unique key for the container service
-	// key := container.ContainerID[:12] // Use short ID
 	key := container.ContainerID[:12]
 	// You can access the embedded JavaProcess like this: container.JavaProcess
 
