@@ -4,8 +4,11 @@ package discovery
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
+
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 // JavaProcess represents a discovered Java process with OTEL semantic convention compliance
@@ -189,18 +192,24 @@ func DefaultDiscoveryOptions() DiscoveryOptions {
 }
 
 // NewDiscoverer creates a new process discoverer with default options
-func NewDiscoverer(ctx context.Context, opts DiscoveryOptions) *discoverer {
+func NewDiscoverer(ctx context.Context, opts DiscoveryOptions) (*discoverer, error) {
 	return NewDiscovererWithOptions(ctx, DefaultDiscoveryOptions())
 }
 
 // NewDiscovererWithOptions creates a new process discoverer with custom options
-func NewDiscovererWithOptions(ctx context.Context, opts DiscoveryOptions) *discoverer {
+func NewDiscovererWithOptions(ctx context.Context, opts DiscoveryOptions) (*discoverer, error) {
+	allProcs, err := process.Processes()
+	if err != nil {
+		return nil, fmt.Errorf("error creating new discoverer , \n %v", err)
+	}
+
 	return &discoverer{
 		ctx:               ctx,
 		opts:              opts,
 		containerDetector: NewContainerDetector(),
 		userCache:         sync.Map{},
-	}
+		allProcesses:      allProcs,
+	}, nil
 }
 
 // Convenience functions for common use cases
@@ -211,7 +220,10 @@ func FindAllJavaProcesses(ctx context.Context) ([]JavaProcess, error) {
 	opts.ExcludeContainers = false
 	opts.IncludeContainerInfo = true
 
-	discoverer := NewDiscoverer(ctx, opts)
+	discoverer, err := NewDiscoverer(ctx, opts)
+	if err != nil {
+		return nil, fmt.Errorf("error in finding all java processes, \n %v", err)
+	}
 	defer discoverer.Close()
 
 	return discoverer.DiscoverWithOptions(ctx, opts)
@@ -222,7 +234,10 @@ func FindAllNodeProcesses(ctx context.Context) ([]NodeProcess, error) {
 	opts.ExcludeContainers = false
 	opts.IncludeContainerInfo = true
 
-	discoverer := NewDiscoverer(ctx, opts)
+	discoverer, err := NewDiscoverer(ctx, opts)
+	if err != nil {
+		return nil, fmt.Errorf("error in finding all node processes, \n %v", err)
+	}
 	defer discoverer.Close()
 
 	return discoverer.DiscoverNodeWithOptions(ctx, opts)
@@ -233,8 +248,11 @@ func FindAllPythonProcess(ctx context.Context) ([]PythonProcess, error) {
 	opts.ExcludeContainers = false
 	opts.IncludeContainerInfo = true
 
-	discoverer := NewDiscoverer(ctx, opts)
+	discoverer, err := NewDiscoverer(ctx, opts)
 	defer discoverer.Close()
+	if err != nil {
+		return nil, fmt.Errorf("error in finding all python processes, \n %v", err)
+	}
 
 	return discoverer.DiscoverPythonWithOptions(ctx, opts)
 }
@@ -244,7 +262,11 @@ func FindCurrentUserJavaProcesses(ctx context.Context) ([]JavaProcess, error) {
 	opts := DefaultDiscoveryOptions()
 	opts.Filter.CurrentUserOnly = true
 
-	d := NewDiscovererWithOptions(ctx, opts)
+	d, err := NewDiscovererWithOptions(ctx, opts)
+	if err != nil {
+		return nil, fmt.Errorf("error fetching current user's java processes from the host system, \n %v", err)
+	}
+
 	defer d.Close()
 	return d.DiscoverWithOptions(ctx, opts)
 }
@@ -254,7 +276,12 @@ func FindInstrumentedProcesses(ctx context.Context) ([]JavaProcess, error) {
 	opts := DefaultDiscoveryOptions()
 	opts.Filter.HasJavaAgentOnly = true
 
-	d := NewDiscovererWithOptions(ctx, opts)
+	d, err := NewDiscovererWithOptions(ctx, opts)
+
+	if err != nil {
+		return nil, fmt.Errorf("error finding instrumented processes in the host system, \n %v", err)
+	}
+
 	defer d.Close()
 	return d.DiscoverWithOptions(ctx, opts)
 }
@@ -264,7 +291,10 @@ func FindMiddlewareProcesses(ctx context.Context) ([]JavaProcess, error) {
 	opts := DefaultDiscoveryOptions()
 	opts.Filter.HasMWAgentOnly = true
 
-	d := NewDiscovererWithOptions(ctx, opts)
+	d, err := NewDiscovererWithOptions(ctx, opts)
+	if err != nil {
+		return nil, fmt.Errorf("error finding middleware processes in the host system, \n %v", err)
+	}
 	defer d.Close()
 	return d.DiscoverWithOptions(ctx, opts)
 }
