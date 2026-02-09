@@ -34,7 +34,7 @@ func NewNodeSystemdInjector() (*NodeSystemdInjector, error) {
 	nodeProcs, err := discovery.FindAllNodeProcesses(ctx)
 	if err != nil {
 		return nil, fmt.Errorf(
-			"error in creating NodeSystemdInjector, %s",
+		return nil, fmt.Errorf("error creating NodeSystemdInjector: %w", err)
 			err.Error(),
 		)
 	}
