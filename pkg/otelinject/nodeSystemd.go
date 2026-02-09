@@ -54,7 +54,7 @@ func (n *NodeSystemdInjector) ValidateAssets(baseDir string) bool {
 }
 
 func (n *NodeSystemdInjector) Instrument() error {
-	if n.Status.Ready == false {
+	if !n.Status.Ready {
 		return fmt.Errorf("NodeSystemdInjector is not ready")
 	}
 	var errorsInstrumentation error
