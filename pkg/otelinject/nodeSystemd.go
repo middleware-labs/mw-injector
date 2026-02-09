@@ -48,7 +48,10 @@ func NewNodeSystemdInjector() (*NodeSystemdInjector, error) {
 	return ret, nil
 }
 
-func (n NodeSystemdInjector) ValidateAssets(baseDir string) bool {
+func (n *NodeSystemdInjector) ValidateAssets(baseDir string) bool {
+	n.Status = ValidateNodeAgent(baseDir)
+	return n.Status.Ready
+}
 	n.Status = ValidateNodeAgent("")
 	return n.Status.Ready
 }
