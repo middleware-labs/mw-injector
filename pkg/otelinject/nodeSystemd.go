@@ -10,8 +10,6 @@ import (
 	"github.com/middleware-labs/java-injector/pkg/discovery"
 )
 
-const NODE_OTEL_AGENT_PATH = ""
-
 // NodeAgentStatus holds the result of the validation.
 type NodeAgentStatus struct {
 	Ready                     bool     `json:"ready"`
