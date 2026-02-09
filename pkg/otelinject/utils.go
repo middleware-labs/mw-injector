@@ -5,21 +5,30 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/k0kubun/pp"
 )
 
 const (
-	DefaultNodeAgentBasePath = "/usr/lib/opentelemetry/nodejs"
+	DefaultNodeAgentBasePath   = "/usr/lib/opentelemetry/nodejs"
+	DefaultLibOtelInjectorPath = "/usr/lib/opentelemetry/libotelinject.so"
 )
 
 // ValidateNodeAgent checks whether the OpenTelemetry Node.js
 // auto-instrumentation agent is present and ready to be used.
 func ValidateNodeAgent(basePath string) NodeAgentStatus {
+
 	if basePath == "" {
 		basePath = DefaultNodeAgentBasePath
 	}
 
 	status := NodeAgentStatus{Ready: true}
 
+	if err := ldPreloadSharedObjectPresent(); err != nil {
+		status.Errors = append(status.Errors, err.Error())
+	} else {
+		status.InjectorSharedObjectFound = true
+	}
 	// 1. The critical entry point that the injector loads via NODE_OPTIONS -r flag.
 	//    Without this file, instrumentation does nothing.
 	registerJS := filepath.Join(basePath,
@@ -30,10 +39,10 @@ func ValidateNodeAgent(basePath string) NodeAgentStatus {
 	)
 	if _, err := os.Stat(registerJS); err != nil {
 		status.RegisterJSFound = false
-		status.Ready = false
 		status.Errors = append(status.Errors,
 			fmt.Sprintf("register.js entry point not found: %s", registerJS))
 	} else {
+		pp.Println("register.js entry point found: %v\n", registerJS)
 		status.RegisterJSFound = true
 	}
 
@@ -47,8 +56,8 @@ func ValidateNodeAgent(basePath string) NodeAgentStatus {
 	if ver, err := readPackageVersion(pkgJSONPath); err != nil {
 		status.Errors = append(status.Errors,
 			fmt.Sprintf("could not read package.json: %v", err))
-		status.Ready = false
 	} else {
+		pp.Printf("could read package.json: %v\n", ver)
 		status.PackageVersion = ver
 	}
 
@@ -69,7 +78,6 @@ func ValidateNodeAgent(basePath string) NodeAgentStatus {
 		depDir := filepath.Join(nodeModules, dep)
 		if _, err := os.Stat(depDir); err != nil {
 			status.MissingDeps = append(status.MissingDeps, dep)
-			status.Ready = false
 		}
 	}
 
@@ -77,7 +85,10 @@ func ValidateNodeAgent(basePath string) NodeAgentStatus {
 		status.Errors = append(status.Errors,
 			fmt.Sprintf("missing required node_modules: %v", status.MissingDeps))
 	}
-
+	pp.Println(status)
+	if len(status.Errors) > 0 {
+		status.Ready = false
+	}
 	return status
 }
 
@@ -99,4 +110,11 @@ func readPackageVersion(path string) (string, error) {
 	}
 
 	return pkg.Version, nil
+}
+
+func ldPreloadSharedObjectPresent() error {
+	if _, err := os.Stat(DefaultLibOtelInjectorPath); err != nil {
+		return fmt.Errorf("libotelinjec.so not found in default path %s, %v", err)
+	}
+	return nil
 }

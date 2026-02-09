@@ -2,7 +2,9 @@ package otelinject
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
@@ -12,28 +14,22 @@ const NODE_OTEL_AGENT_PATH = ""
 
 // NodeAgentStatus holds the result of the validation.
 type NodeAgentStatus struct {
-	Ready           bool     `json:"ready"`
-	RegisterJSFound bool     `json:"register_js_found"`
-	PackageVersion  string   `json:"package_version,omitempty"`
-	MissingDeps     []string `json:"missing_deps,omitempty"`
-	Errors          []string `json:"errors,omitempty"`
-}
-
-type NodeSystemdDropin struct {
-	ld_preload        string `json:"LD_PRELOAD"`
-	service_name      string `json:"OTEL_SERVICE_NAME"`
-	exporter_endpoint string `json:"OTEL_EXPORTER_OTLP_ENDPOINT"`
-	otlp_headers      string `json:"OTEL_EXPORTER_OTLP_HEADERS"`
+	Ready                     bool     `json:"ready"`
+	InjectorSharedObjectFound bool     `json:"libotelinject.so_found"`
+	RegisterJSFound           bool     `json:"register_js_found"`
+	PackageVersion            string   `json:"package_version,omitempty"`
+	MissingDeps               []string `json:"missing_deps,omitempty"`
+	Errors                    []string `json:"errors,omitempty"`
 }
 
 type NodeSystemdInjector struct {
 	NodeProcs []discovery.NodeProcess
 	Status    NodeAgentStatus
-	DropIn    NodeSystemdDropin
 }
 
 func NewNodeSystemdInjector() (*NodeSystemdInjector, error) {
 	ctx := context.Background()
+
 	pp.Println("CREATING NEW NodeSystemdInjector")
 	nodeProcs, err := discovery.FindAllNodeProcesses(ctx)
 	if err != nil {
@@ -43,19 +39,65 @@ func NewNodeSystemdInjector() (*NodeSystemdInjector, error) {
 		)
 	}
 
-	return &NodeSystemdInjector{
+	ret := &NodeSystemdInjector{
 		NodeProcs: nodeProcs,
-		Status:    ValidateNodeAgent(""),
-	}, nil
+	}
+
+	ret.ValidateAssets("")
+
+	return ret, nil
 }
 
 func (n NodeSystemdInjector) ValidateAssets(baseDir string) bool {
+	n.Status = ValidateNodeAgent("")
 	return n.Status.Ready
 }
 
-func (n NodeSystemdInjector) Instrument() error {
+func (n *NodeSystemdInjector) Instrument() error {
 	if n.Status.Ready == false {
 		return fmt.Errorf("NodeSystemdInjector is not ready")
 	}
+	var errorsInstrumentation error
+	for _, proc := range n.NodeProcs {
+		if !proc.IsSystemdProcess() {
+			continue
+		} else {
+			// pp.Println("Got a systemd process --> ", proc)
+			err := n.InjectOtelInstrumentation(&proc)
+			if err != nil {
+				errorsInstrumentation = errors.Join(errorsInstrumentation, err)
+			}
+		}
+	}
+	return errorsInstrumentation
+}
 
+func (n *NodeSystemdInjector) InjectOtelInstrumentation(proc *discovery.NodeProcess) error {
+	// 3. Create Drop-in, Reload and Restart
+	dropInConfig, err := NewSystemdDropin(proc.ProcessPID)
+	if err != nil {
+		return fmt.Errorf("could not create a drop-in config for process...\n->%v", proc)
+
+	}
+	if err := dropInConfig.applySystemdDropIn(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Helper function to extract service name from cgroup lines
+func extractServiceNameFromCgroup(lines []string) string {
+	for _, line := range lines {
+		// Example cgroup line: 0::/system.slice/myservice.service
+		if strings.Contains(line, ".service") {
+			parts := strings.Split(line, "/")
+			for _, part := range parts {
+				if strings.HasSuffix(part, ".service") {
+					return part
+				}
+			}
+		}
+	}
+	return ""
 }
