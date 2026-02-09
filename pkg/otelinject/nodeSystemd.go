@@ -79,7 +79,7 @@ func (n *NodeSystemdInjector) InjectOtelInstrumentation(proc *discovery.NodeProc
 	// 3. Create Drop-in, Reload and Restart
 	dropInConfig, err := NewSystemdDropin(proc.ProcessPID)
 	if err != nil {
-		return fmt.Errorf("could not create a drop-in config for process...\n->%v", proc)
+		return fmt.Errorf("could not create drop-in config for process %d (%s): %w", proc.ProcessPID, proc.ServiceName, err)
 
 	}
 	if err := dropInConfig.applySystemdDropIn(); err != nil {
