@@ -46,14 +46,21 @@ func NewSystemdDropin(processPID int32) (*SystemdDropin, error) {
 }
 
 func (d *SystemdDropin) applySystemdDropIn() error {
-	// 1. Prepare the content using the struct fields
-	// We use %q (quoted string) to ensure values are safely wrapped in quotes.
+	if err := d.validate(); err != nil {
+		return fmt.Errorf("invalid drop-in config: %w", err)
+	}
+
 	content := fmt.Sprintf(`[Service]
 Environment="LD_PRELOAD=%s"
 Environment="OTEL_SERVICE_NAME=%s"
 Environment="OTEL_EXPORTER_OTLP_ENDPOINT=%s"
 Environment="OTEL_EXPORTER_OTLP_HEADERS=%s"
-`, d.LdPreload, d.ServiceName, d.ExporterEndpoint, d.OtlpHeaders)
+`,
+		shellescape(d.LdPreload),
+		shellescape(d.ServiceName),
+		shellescape(d.ExporterEndpoint),
+		shellescape(d.OtlpHeaders),
+	)
 
 	// 2. Setup Directory: /etc/systemd/system/<service>.d/
 	dropInDir := fmt.Sprintf("/etc/systemd/system/%s.service.d", d.ServiceName)
@@ -80,4 +87,32 @@ Environment="OTEL_EXPORTER_OTLP_HEADERS=%s"
 	}
 
 	return nil
+}
+
+func (d *SystemdDropin) validate() error {
+	forbidden := []string{"\n", "\r", "\""}
+	fields := map[string]string{
+		"ServiceName":      d.ServiceName,
+		"LdPreload":        d.LdPreload,
+		"ExporterEndpoint": d.ExporterEndpoint,
+		"OtlpHeaders":      d.OtlpHeaders,
+	}
+
+	for name, value := range fields {
+		for _, char := range forbidden {
+			if strings.Contains(value, char) {
+				return fmt.Errorf("%s contains forbidden character: %q", name, char)
+			}
+		}
+	}
+	return nil
+}
+
+// Helper function for systemd environment escaping
+func shellescape(s string) string {
+	// Systemd expects values in the format: Environment="KEY=value"
+	// We need to escape quotes and backslashes
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return s
 }

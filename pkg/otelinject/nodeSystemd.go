@@ -52,9 +52,6 @@ func (n *NodeSystemdInjector) ValidateAssets(baseDir string) bool {
 	n.Status = ValidateNodeAgent(baseDir)
 	return n.Status.Ready
 }
-	n.Status = ValidateNodeAgent("")
-	return n.Status.Ready
-}
 
 func (n *NodeSystemdInjector) Instrument() error {
 	if n.Status.Ready == false {
