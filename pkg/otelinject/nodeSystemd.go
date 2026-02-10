@@ -31,10 +31,7 @@ func NewNodeSystemdInjector() (*NodeSystemdInjector, error) {
 	pp.Println("CREATING NEW NodeSystemdInjector")
 	nodeProcs, err := discovery.FindAllNodeProcesses(ctx)
 	if err != nil {
-		return nil, fmt.Errorf(
 		return nil, fmt.Errorf("error creating NodeSystemdInjector: %w", err)
-			err.Error(),
-		)
 	}
 
 	ret := &NodeSystemdInjector{
@@ -84,15 +81,14 @@ func (n *NodeSystemdInjector) InjectOtelInstrumentation(proc *discovery.NodeProc
 	return nil
 }
 
-// Helper function to extract service name from cgroup lines
 func extractServiceNameFromCgroup(lines []string) string {
 	for _, line := range lines {
-		// Example cgroup line: 0::/system.slice/myservice.service
 		if strings.Contains(line, ".service") {
 			parts := strings.Split(line, "/")
-			for _, part := range parts {
-				if strings.HasSuffix(part, ".service") {
-					return part
+			// Walk backwards — the actual service is the last .service in the path
+			for i := len(parts) - 1; i >= 0; i-- {
+				if strings.HasSuffix(parts[i], ".service") {
+					return parts[i]
 				}
 			}
 		}

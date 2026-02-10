@@ -114,9 +114,7 @@ func readPackageVersion(path string) (string, error) {
 
 func ldPreloadSharedObjectPresent() error {
 	if _, err := os.Stat(DefaultLibOtelInjectorPath); err != nil {
-	if _, err := os.Stat(DefaultLibOtelInjectorPath); err != nil {
 		return fmt.Errorf("libotelinject.so not found at %s: %w", DefaultLibOtelInjectorPath, err)
-	}
 	}
 	return nil
 }

@@ -90,6 +90,13 @@ Environment="OTEL_EXPORTER_OTLP_HEADERS=%s"
 }
 
 func (d *SystemdDropin) validate() error {
+	blocked := []string{"user@", "session-", "init.scope", "dbus"}
+	for _, prefix := range blocked {
+		if strings.Contains(d.ServiceName, prefix) {
+			return fmt.Errorf("refusing to instrument system service: %s", d.ServiceName)
+		}
+	}
+
 	forbidden := []string{"\n", "\r", "\""}
 	fields := map[string]string{
 		"ServiceName":      d.ServiceName,
