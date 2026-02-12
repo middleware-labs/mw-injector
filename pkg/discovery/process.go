@@ -1084,6 +1084,10 @@ func (d *discoverer) extractPackageInfo(nodeProc *NodeProcess, workingDir string
 func (d *discoverer) extractNodeServiceName(nodeProc *NodeProcess, cmdArgs []string) {
 	serviceName := ""
 
+	if unitName := d.extractSystemdUnitName(nodeProc.ProcessPID); unitName != "" {
+		nodeProc.ServiceName = d.cleanServiceName(unitName)
+		return
+	}
 	// Strategy 1: Environment variables (NODE_ENV, SERVICE_NAME, etc.)
 	serviceName = d.extractFromNodeEnvironment(cmdArgs)
 	if serviceName != "" {

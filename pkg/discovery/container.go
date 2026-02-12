@@ -11,8 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/k0kubun/pp"
 )
 
 // ContainerInfo holds information about a process running in a container
@@ -92,7 +90,7 @@ func PrintContainerCacheStats() {
 	}
 
 	efficiency := float64(hits) / float64(total) * 100
-	pp.Printf("\n[Container Cache Stats] Hits: %v | Misses: %v | Efficiency: %v\n",
+	fmt.Printf("\n[Container Cache Stats] Hits: %v | Misses: %v | Efficiency: %v\n",
 		hits, misses, efficiency)
 }
 
