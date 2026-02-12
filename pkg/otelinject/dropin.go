@@ -18,20 +18,10 @@ type SystemdDropin struct {
 }
 
 func NewSystemdDropin(processPID int32) (*SystemdDropin, error) {
-	pp.Println("Trying to create drop")
-
-	path := fmt.Sprintf("/proc/%d/cgroup", processPID) // Input
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read cgroup: %w", err)
-	}
-	lines := strings.Split(string(data), "\n")
-	serviceName := extractServiceNameFromCgroup(lines)
-	if serviceName == "" {
+	isSystemd, cleanName := checkSystemdStatus(processPID)
+	if !isSystemd {
 		return nil, fmt.Errorf("could not extract service name from cgroup, cannot create drop-in")
 	}
-
-	cleanName := strings.TrimSuffix(serviceName, ".service")
 
 	// Get values from Environment
 	apiKey := os.Getenv("MW_API_KEY")

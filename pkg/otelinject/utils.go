@@ -149,21 +149,6 @@ func ldPreloadSharedObjectPresent() error {
 	return nil
 }
 
-func extractServiceNameFromCgroup(lines []string) string {
-	for _, line := range lines {
-		if strings.Contains(line, ".service") {
-			parts := strings.Split(line, "/")
-			// Walk backwards — the actual service is the last .service in the path
-			for i := len(parts) - 1; i >= 0; i-- {
-				if strings.HasSuffix(parts[i], ".service") {
-					return parts[i]
-				}
-			}
-		}
-	}
-	return ""
-}
-
 func checkSystemdStatus(pid int32) (bool, string) {
 	path := fmt.Sprintf("/proc/%d/cgroup", pid)
 	data, err := os.ReadFile(path)
