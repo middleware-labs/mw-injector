@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
-	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
 )
 
@@ -27,8 +25,6 @@ type NodeSystemdInjector struct {
 
 func NewNodeSystemdInjector() (*NodeSystemdInjector, error) {
 	ctx := context.Background()
-
-	pp.Println("CREATING NEW NodeSystemdInjector")
 	nodeProcs, err := discovery.FindAllNodeProcesses(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error creating NodeSystemdInjector: %w", err)
@@ -54,44 +50,37 @@ func (n *NodeSystemdInjector) Instrument() error {
 	}
 	var errorsInstrumentation error
 	for _, proc := range n.NodeProcs {
-		if !proc.IsSystemdProcess() {
+		isSystemd, cleanName := checkSystemdStatus(proc.ProcessPID)
+		if !isSystemd {
 			continue
-		} else {
-			// pp.Println("Got a systemd process --> ", proc)
-			err := n.InjectOtelInstrumentation(&proc)
-			if err != nil {
-				errorsInstrumentation = errors.Join(errorsInstrumentation, err)
-			}
+		}
+		dropIn, err := NewSystemdDropin(cleanName)
+		if err != nil {
+			errorsInstrumentation = errors.Join(errorsInstrumentation, err)
+			continue
+		}
+
+		if err := dropIn.applySystemdDropIn(); err != nil {
+			errorsInstrumentation = errors.Join(errorsInstrumentation, err)
 		}
 	}
 	return errorsInstrumentation
 }
 
-func (n *NodeSystemdInjector) InjectOtelInstrumentation(proc *discovery.NodeProcess) error {
-	// 3. Create Drop-in, Reload and Restart
-	dropInConfig, err := NewSystemdDropin(proc.ProcessPID)
-	if err != nil {
-		return fmt.Errorf("could not create drop-in config for process %d (%s): %w", proc.ProcessPID, proc.ServiceName, err)
+func (n *NodeSystemdInjector) Uninstrument() error {
+	var errs error
+	for _, proc := range n.NodeProcs {
+		isSystemd, cleanName := checkSystemdStatus(proc.ProcessPID)
+		if !isSystemd {
+			continue
+		}
 
-	}
-	if err := dropInConfig.applySystemdDropIn(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func extractServiceNameFromCgroup(lines []string) string {
-	for _, line := range lines {
-		if strings.Contains(line, ".service") {
-			parts := strings.Split(line, "/")
-			// Walk backwards — the actual service is the last .service in the path
-			for i := len(parts) - 1; i >= 0; i-- {
-				if strings.HasSuffix(parts[i], ".service") {
-					return parts[i]
-				}
-			}
+		if err := removeSystemdDropIn(cleanName); err != nil {
+			errs = errors.Join(
+				errs,
+				fmt.Errorf("could not remove dropIn for %s and pid %d, %w", cleanName, proc.ProcessPID, err),
+			)
 		}
 	}
-	return ""
+	return errs
 }

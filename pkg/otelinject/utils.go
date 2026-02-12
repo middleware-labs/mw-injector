@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/k0kubun/pp"
+	"strings"
 )
 
 const (
 	DefaultNodeAgentBasePath   = "/usr/lib/opentelemetry/nodejs"
 	DefaultLibOtelInjectorPath = "/usr/lib/opentelemetry/libotelinject.so"
+	DefaultJavaAgentBasePath   = "/usr/lib/opentelemetry/jvm"
 )
 
 // ValidateNodeAgent checks whether the OpenTelemetry Node.js
@@ -42,7 +42,6 @@ func ValidateNodeAgent(basePath string) NodeAgentStatus {
 		status.Errors = append(status.Errors,
 			fmt.Sprintf("register.js entry point not found: %s", registerJS))
 	} else {
-		pp.Println("register.js entry point found: %v\n", registerJS)
 		status.RegisterJSFound = true
 	}
 
@@ -57,7 +56,6 @@ func ValidateNodeAgent(basePath string) NodeAgentStatus {
 		status.Errors = append(status.Errors,
 			fmt.Sprintf("could not read package.json: %v", err))
 	} else {
-		pp.Printf("could read package.json: %v\n", ver)
 		status.PackageVersion = ver
 	}
 
@@ -85,10 +83,39 @@ func ValidateNodeAgent(basePath string) NodeAgentStatus {
 		status.Errors = append(status.Errors,
 			fmt.Sprintf("missing required node_modules: %v", status.MissingDeps))
 	}
-	pp.Println(status)
 	if len(status.Errors) > 0 {
 		status.Ready = false
 	}
+	return status
+}
+
+func ValidateJavaAgent(basePath string) JavaAgentStatus {
+	if basePath == "" {
+		basePath = DefaultJavaAgentBasePath
+	}
+
+	status := JavaAgentStatus{
+		Ready: true,
+	}
+
+	if err := ldPreloadSharedObjectPresent(); err != nil {
+		status.Errors = append(status.Errors, err.Error())
+	} else {
+		status.InjectorSharedObjectFound = true
+	}
+
+	javaAgentJar := filepath.Join(basePath, "javaagent.jar")
+	if _, err := os.Stat(javaAgentJar); err != nil {
+		status.Ready = false
+		status.Errors = append(status.Errors, fmt.Sprintf("javaagent.jar not found at %s: %v", javaAgentJar, err))
+	} else {
+		status.JavaAgentJarFound = true
+	}
+
+	if len(status.Errors) > 0 {
+		status.Ready = false
+	}
+
 	return status
 }
 
@@ -117,4 +144,46 @@ func ldPreloadSharedObjectPresent() error {
 		return fmt.Errorf("libotelinject.so not found at %s: %w", DefaultLibOtelInjectorPath, err)
 	}
 	return nil
+}
+
+func checkSystemdStatus(pid int32) (bool, string) {
+	path := fmt.Sprintf("/proc/%d/cgroup", pid)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, ""
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		// Only look at the main systemd hierarchy or unified hierarchy (0::)
+		if !strings.Contains(line, ":name=systemd:") && !strings.HasPrefix(line, "0::") {
+			continue
+		}
+
+		// Extract the path part (everything after the second colon)
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		cgroupPath := parts[2]
+
+		// Split path into segments: /, user.slice, user@1000.service, app.slice, my-app.service
+		segments := strings.Split(cgroupPath, "/")
+
+		// REVERSE SEARCH: Find the *last* segment ending in .service
+		for i := len(segments) - 1; i >= 0; i-- {
+			segment := segments[i]
+			if strings.HasSuffix(segment, ".service") {
+				// FILTER: Ignore the generic user session service
+				if strings.HasPrefix(segment, "user@") {
+					continue
+				}
+
+				// Found a real service!
+				unitName := strings.TrimSuffix(segment, ".service")
+				return true, unitName
+			}
+		}
+	}
+	return false, ""
 }
