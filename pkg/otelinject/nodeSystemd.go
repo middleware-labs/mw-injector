@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
@@ -79,19 +78,4 @@ func (n *NodeSystemdInjector) InjectOtelInstrumentation(proc *discovery.NodeProc
 	}
 
 	return nil
-}
-
-func extractServiceNameFromCgroup(lines []string) string {
-	for _, line := range lines {
-		if strings.Contains(line, ".service") {
-			parts := strings.Split(line, "/")
-			// Walk backwards — the actual service is the last .service in the path
-			for i := len(parts) - 1; i >= 0; i-- {
-				if strings.HasSuffix(parts[i], ".service") {
-					return parts[i]
-				}
-			}
-		}
-	}
-	return ""
 }

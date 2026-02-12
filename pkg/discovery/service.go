@@ -6,11 +6,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/k0kubun/pp"
 )
 
 func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string) {
 	// --- Level 1: Infrastructure (Container) ---
 	if javaProc.IsInContainer() && javaProc.ContainerInfo.ContainerName != "" {
+		pp.Println("From container: ", javaProc.ContainerInfo)
 		javaProc.ServiceName = javaProc.ContainerInfo.ContainerName
 		return
 	}
@@ -18,6 +21,7 @@ func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string)
 	// --- Level 2: Explicit Environment (OTel Standards) ---
 	// Check /proc/PID/environ for OTEL_SERVICE_NAME
 	if envName := d.extractFromEnviron(javaProc.ProcessPID); envName != "" {
+		pp.Println("From environment: ", envName)
 		javaProc.ServiceName = d.cleanServiceName(envName)
 		return
 	}
@@ -25,12 +29,14 @@ func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string)
 	// --- Level 3: Systemd Unit Name (High Confidence for Host) ---
 	// NEW: If it's a systemd service, use the unit name!
 	if unitName := d.extractSystemdUnitName(javaProc.ProcessPID); unitName != "" {
+		pp.Println("From systemdunit name : ", unitName)
 		javaProc.ServiceName = d.cleanServiceName(unitName)
 		return
 	}
 
 	// --- Level 4: Java System Properties (-Dservice.name, etc.) ---
 	if propName := d.extractFromSystemProperties(cmdArgs); propName != "" {
+		pp.Println("From system properties: ", propName)
 		javaProc.ServiceName = propName
 		return
 	}
@@ -38,6 +44,7 @@ func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string)
 	// --- Level 5: Application Identity (JAR/Main Class) ---
 	if javaProc.JarFile != "" {
 		name := d.extractFromJarName(javaProc.JarFile)
+		pp.Println("From extract from jar name, ", name)
 		if !d.isGenericJavaName(name) {
 			javaProc.ServiceName = name
 			return
@@ -46,6 +53,7 @@ func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string)
 
 	if javaProc.MainClass != "" {
 		name := d.extractFromMainClass(javaProc.MainClass)
+		pp.Println("From extract from main class, ", name)
 		if !d.isGenericJavaName(name) {
 			javaProc.ServiceName = name
 			return
@@ -55,6 +63,7 @@ func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string)
 	// --- Level 6: Directory structure (Last Resort) ---
 	if javaProc.JarPath != "" {
 		name := d.extractFromDirectory(javaProc.JarPath)
+		pp.Println("From extract from directory, ", name)
 		if !d.isGenericJavaName(name) {
 			javaProc.ServiceName = name
 			return
@@ -71,20 +80,42 @@ func (d *discoverer) extractSystemdUnitName(pid int32) string {
 		return ""
 	}
 
+	ignoredServices := map[string]bool{
+		"plasma-plasmashell": true,
+		"gnome-shell":        true,
+		"gnome-terminal":     true,
+		"xfce4-session":      true,
+		"dbus":               true,
+		"systemd":            true,
+		"init":               true,
+	}
+
 	lines := strings.Split(string(data), "\n")
 	for _, line := range lines {
-		// Look for any line containing ".service"
-		if strings.Contains(line, ".service") {
-			// Split by '/' to get the last part: e.g., "book-service-java.service"
-			parts := strings.Split(line, "/")
-			unit := parts[len(parts)-1]
+		if !strings.Contains(line, ":name=systemd:") && !strings.HasPrefix(line, "0::") {
+			continue
+		}
 
-			// In some cgroup v2 formats, it might look like "book.service/some-sub-task"
-			// So we take the first part of that specific segment
-			if strings.Contains(unit, ".service") {
-				unitParts := strings.Split(unit, ".service")
-				// Return the name before ".service"
-				return unitParts[0]
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		cgroupPath := parts[2]
+		segments := strings.Split(cgroupPath, "/")
+
+		// REVERSE SEARCH
+		for i := len(segments) - 1; i >= 0; i-- {
+			segment := segments[i]
+			if strings.HasSuffix(segment, ".service") {
+				// 1. Strip extension
+				unitName := strings.TrimSuffix(segment, ".service")
+
+				// 2. CHECK IGNORE LIST
+				if strings.HasPrefix(segment, "user@") || ignoredServices[unitName] {
+					continue
+				}
+
+				return unitName
 			}
 		}
 	}

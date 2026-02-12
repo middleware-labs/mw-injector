@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/k0kubun/pp"
 )
@@ -12,6 +13,7 @@ import (
 const (
 	DefaultNodeAgentBasePath   = "/usr/lib/opentelemetry/nodejs"
 	DefaultLibOtelInjectorPath = "/usr/lib/opentelemetry/libotelinject.so"
+	DefaultJavaAgentBasePath   = "/usr/lib/opentelemetry/jvm"
 )
 
 // ValidateNodeAgent checks whether the OpenTelemetry Node.js
@@ -92,6 +94,34 @@ func ValidateNodeAgent(basePath string) NodeAgentStatus {
 	return status
 }
 
+func ValidateJavaAgent(basePath string) JavaAgentStatus {
+	if basePath == "" {
+		basePath = DefaultJavaAgentBasePath
+	}
+
+	status := JavaAgentStatus{
+		Ready: true,
+	}
+
+	if err := ldPreloadSharedObjectPresent(); err != nil {
+		status.Errors = append(status.Errors, err.Error())
+	} else {
+		status.InjectorSharedObjectFound = true
+	}
+
+	javaAgentJar := filepath.Join(basePath, "javaagent.jar")
+	if _, err := os.Stat(javaAgentJar); err != nil {
+		status.Ready = false
+		status.Errors = append(status.Errors, fmt.Sprintf("javaagent.jar not found at %s: %v", javaAgentJar, err))
+	}
+
+	if len(status.Errors) > 0 {
+		status.Ready = false
+	}
+
+	return status
+}
+
 // readPackageVersion reads the "version" field from a package.json file.
 func readPackageVersion(path string) (string, error) {
 	data, err := os.ReadFile(path)
@@ -117,4 +147,61 @@ func ldPreloadSharedObjectPresent() error {
 		return fmt.Errorf("libotelinject.so not found at %s: %w", DefaultLibOtelInjectorPath, err)
 	}
 	return nil
+}
+
+func extractServiceNameFromCgroup(lines []string) string {
+	for _, line := range lines {
+		if strings.Contains(line, ".service") {
+			parts := strings.Split(line, "/")
+			// Walk backwards — the actual service is the last .service in the path
+			for i := len(parts) - 1; i >= 0; i-- {
+				if strings.HasSuffix(parts[i], ".service") {
+					return parts[i]
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func checkSystemdStatus(pid int32) (bool, string) {
+	path := fmt.Sprintf("/proc/%d/cgroup", pid)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, ""
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		// Only look at the main systemd hierarchy or unified hierarchy (0::)
+		if !strings.Contains(line, ":name=systemd:") && !strings.HasPrefix(line, "0::") {
+			continue
+		}
+
+		// Extract the path part (everything after the second colon)
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		cgroupPath := parts[2]
+
+		// Split path into segments: /, user.slice, user@1000.service, app.slice, my-app.service
+		segments := strings.Split(cgroupPath, "/")
+
+		// REVERSE SEARCH: Find the *last* segment ending in .service
+		for i := len(segments) - 1; i >= 0; i-- {
+			segment := segments[i]
+			if strings.HasSuffix(segment, ".service") {
+				// FILTER: Ignore the generic user session service
+				if strings.HasPrefix(segment, "user@") {
+					continue
+				}
+
+				// Found a real service!
+				unitName := strings.TrimSuffix(segment, ".service")
+				return true, unitName
+			}
+		}
+	}
+	return false, ""
 }
