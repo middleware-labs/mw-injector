@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/k0kubun/pp"
 )
 
 const (
@@ -44,7 +43,6 @@ func ValidateNodeAgent(basePath string) NodeAgentStatus {
 		status.Errors = append(status.Errors,
 			fmt.Sprintf("register.js entry point not found: %s", registerJS))
 	} else {
-		pp.Println("register.js entry point found: %v\n", registerJS)
 		status.RegisterJSFound = true
 	}
 
@@ -59,7 +57,6 @@ func ValidateNodeAgent(basePath string) NodeAgentStatus {
 		status.Errors = append(status.Errors,
 			fmt.Sprintf("could not read package.json: %v", err))
 	} else {
-		pp.Printf("could read package.json: %v\n", ver)
 		status.PackageVersion = ver
 	}
 
@@ -87,7 +84,6 @@ func ValidateNodeAgent(basePath string) NodeAgentStatus {
 		status.Errors = append(status.Errors,
 			fmt.Sprintf("missing required node_modules: %v", status.MissingDeps))
 	}
-	pp.Println(status)
 	if len(status.Errors) > 0 {
 		status.Ready = false
 	}
@@ -113,6 +109,8 @@ func ValidateJavaAgent(basePath string) JavaAgentStatus {
 	if _, err := os.Stat(javaAgentJar); err != nil {
 		status.Ready = false
 		status.Errors = append(status.Errors, fmt.Sprintf("javaagent.jar not found at %s: %v", javaAgentJar, err))
+	} else {
+		status.JavaAgentJarFound = true
 	}
 
 	if len(status.Errors) > 0 {

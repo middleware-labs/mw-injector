@@ -7,13 +7,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/k0kubun/pp"
 )
 
 func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string) {
 	// --- Level 1: Infrastructure (Container) ---
 	if javaProc.IsInContainer() && javaProc.ContainerInfo.ContainerName != "" {
-		pp.Println("From container: ", javaProc.ContainerInfo)
 		javaProc.ServiceName = javaProc.ContainerInfo.ContainerName
 		return
 	}
@@ -21,7 +19,6 @@ func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string)
 	// --- Level 2: Explicit Environment (OTel Standards) ---
 	// Check /proc/PID/environ for OTEL_SERVICE_NAME
 	if envName := d.extractFromEnviron(javaProc.ProcessPID); envName != "" {
-		pp.Println("From environment: ", envName)
 		javaProc.ServiceName = d.cleanServiceName(envName)
 		return
 	}
@@ -29,14 +26,12 @@ func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string)
 	// --- Level 3: Systemd Unit Name (High Confidence for Host) ---
 	// NEW: If it's a systemd service, use the unit name!
 	if unitName := d.extractSystemdUnitName(javaProc.ProcessPID); unitName != "" {
-		pp.Println("From systemdunit name : ", unitName)
 		javaProc.ServiceName = d.cleanServiceName(unitName)
 		return
 	}
 
 	// --- Level 4: Java System Properties (-Dservice.name, etc.) ---
 	if propName := d.extractFromSystemProperties(cmdArgs); propName != "" {
-		pp.Println("From system properties: ", propName)
 		javaProc.ServiceName = propName
 		return
 	}
@@ -44,7 +39,6 @@ func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string)
 	// --- Level 5: Application Identity (JAR/Main Class) ---
 	if javaProc.JarFile != "" {
 		name := d.extractFromJarName(javaProc.JarFile)
-		pp.Println("From extract from jar name, ", name)
 		if !d.isGenericJavaName(name) {
 			javaProc.ServiceName = name
 			return
@@ -53,7 +47,6 @@ func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string)
 
 	if javaProc.MainClass != "" {
 		name := d.extractFromMainClass(javaProc.MainClass)
-		pp.Println("From extract from main class, ", name)
 		if !d.isGenericJavaName(name) {
 			javaProc.ServiceName = name
 			return
@@ -63,7 +56,6 @@ func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string)
 	// --- Level 6: Directory structure (Last Resort) ---
 	if javaProc.JarPath != "" {
 		name := d.extractFromDirectory(javaProc.JarPath)
-		pp.Println("From extract from directory, ", name)
 		if !d.isGenericJavaName(name) {
 			javaProc.ServiceName = name
 			return

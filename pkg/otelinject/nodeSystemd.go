@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
 )
 
@@ -26,8 +25,6 @@ type NodeSystemdInjector struct {
 
 func NewNodeSystemdInjector() (*NodeSystemdInjector, error) {
 	ctx := context.Background()
-
-	pp.Println("CREATING NEW NodeSystemdInjector")
 	nodeProcs, err := discovery.FindAllNodeProcesses(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error creating NodeSystemdInjector: %w", err)

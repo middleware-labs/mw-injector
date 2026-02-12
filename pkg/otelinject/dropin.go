@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/k0kubun/pp"
 )
 
 type SystemdDropin struct {
@@ -63,8 +62,6 @@ Environment="OTEL_EXPORTER_OTLP_HEADERS=%s"
 	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
 		return fmt.Errorf("failed to write drop-in file: %w", err)
 	}
-
-	pp.Printf("Written drop-in file for %s.service at %s\n", d.ServiceName, filename)
 
 	// 4. Reload Daemon
 	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {

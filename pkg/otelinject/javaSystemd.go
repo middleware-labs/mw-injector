@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
 )
 
@@ -23,11 +22,9 @@ type JavaSystemdInjector struct {
 
 func NewJavaSystemdInjector() (*JavaSystemdInjector, error) {
 	ctx := context.Background()
-
-	pp.Println("CREATING NEW JavaSystemdInjector")
 	javaProcs, err := discovery.FindAllJavaProcesses(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("error creating NodeSystemdInjector: %w", err)
+		return nil, fmt.Errorf("error creating JavaSystemdInjector: %w", err)
 	}
 
 	ret := &JavaSystemdInjector{
@@ -50,10 +47,7 @@ func (j *JavaSystemdInjector) Instrument() error {
 		errs = errors.Join(errs, fmt.Errorf("java agent not found"))
 		return errs
 	}
-	// var errorsInstrumentation []string
 	for _, proc := range j.JavaProcs {
-		// Add support of IsSystemdProcess in javaprocess
-		pp.Println("Checking for process ", proc.ServiceName, " ", proc.ProcessPID)
 		isSystemd, unitName := checkSystemdStatus(proc.ProcessPID)
 
 		if !isSystemd {
