@@ -54,7 +54,7 @@ func (n *NodeSystemdInjector) Instrument() error {
 		if !isSystemd {
 			continue
 		}
-		dropIn, err := NewSystemdDropin(proc.ProcessPID, cleanName)
+		dropIn, err := NewSystemdDropin(cleanName)
 		if err != nil {
 			errorsInstrumentation = errors.Join(errorsInstrumentation, err)
 			continue

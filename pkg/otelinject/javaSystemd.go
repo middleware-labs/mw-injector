@@ -53,7 +53,7 @@ func (j *JavaSystemdInjector) Instrument() error {
 		if !isSystemd {
 			continue
 		}
-		dropIn, err := NewSystemdDropin(proc.ProcessPID, unitName)
+		dropIn, err := NewSystemdDropin(unitName)
 		if err != nil {
 			errs = errors.Join(
 				errs,

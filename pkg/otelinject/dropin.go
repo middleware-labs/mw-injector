@@ -15,7 +15,7 @@ type SystemdDropin struct {
 	OtlpHeaders      string `json:"OTEL_EXPORTER_OTLP_HEADERS"`
 }
 
-func NewSystemdDropin(processPID int32, cleanName string) (*SystemdDropin, error) {
+func NewSystemdDropin(cleanName string) (*SystemdDropin, error) {
 	// Get values from Environment
 	apiKey := os.Getenv("MW_API_KEY")
 	target := os.Getenv("MW_TARGET")
