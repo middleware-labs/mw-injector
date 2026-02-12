@@ -83,3 +83,21 @@ func (j *JavaSystemdInjector) Instrument() error {
 
 	return errs
 }
+
+func (j *JavaSystemdInjector) Uninstrument() error {
+	var errs error
+	for _, proc := range j.JavaProcs {
+		isSystemd, unitName := checkSystemdStatus(proc.ProcessPID)
+		if !isSystemd {
+			continue
+		}
+
+		if err := removeSystemdDropIn(unitName); err != nil {
+			errs = errors.Join(
+				errs,
+				fmt.Errorf("could not remove dropIn for %s and pid %d, %w", unitName, proc.ProcessPID, err),
+			)
+		}
+	}
+	return errs
+}

@@ -66,3 +66,21 @@ func (n *NodeSystemdInjector) Instrument() error {
 	}
 	return errorsInstrumentation
 }
+
+func (n *NodeSystemdInjector) Uninstrument() error {
+	var errs error
+	for _, proc := range n.NodeProcs {
+		isSystemd, cleanName := checkSystemdStatus(proc.ProcessPID)
+		if !isSystemd {
+			continue
+		}
+
+		if err := removeSystemdDropIn(cleanName); err != nil {
+			errs = errors.Join(
+				errs,
+				fmt.Errorf("could not remove dropIn for %s and pid %d, %w", cleanName, proc.ProcessPID, err),
+			)
+		}
+	}
+	return errs
+}

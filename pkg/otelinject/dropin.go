@@ -96,6 +96,36 @@ func (d *SystemdDropin) validate() error {
 	return nil
 }
 
+func removeSystemdDropIn(serviceName string) error {
+	dropInDir := fmt.Sprintf("/etc/systemd/system/%s.service.d", serviceName)
+	dropInPath := filepath.Join(dropInDir, "middleware-otel.conf")
+
+	if _, err := os.Stat(dropInPath); err != nil {
+		return fmt.Errorf("drop-in not found for %s: %w", serviceName, err)
+	}
+
+	if err := os.Remove(dropInPath); err != nil {
+		return fmt.Errorf("failed to remove drop-in file: %w", err)
+	}
+
+	// Remove directory if empty
+	files, _ := os.ReadDir(dropInDir)
+	if len(files) == 0 {
+		os.Remove(dropInDir)
+	}
+
+	// Reload and restart
+	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
+		return fmt.Errorf("daemon-reload failed: %s: %w", string(out), err)
+	}
+
+	if out, err := exec.Command("systemctl", "restart", "--no-block", fmt.Sprintf("%s.service", serviceName)).CombinedOutput(); err != nil {
+		return fmt.Errorf("service restart failed: %s: %w", string(out), err)
+	}
+
+	return nil
+}
+
 // Helper function for systemd environment escaping
 func shellescape(s string) string {
 	// Systemd expects values in the format: Environment="KEY=value"
