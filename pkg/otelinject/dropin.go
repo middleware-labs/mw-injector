@@ -35,20 +35,6 @@ func NewSystemdDropin(processPID int32) (*SystemdDropin, error) {
 	}, nil
 }
 
-func (n *SystemdDropin) InjectOtelInstrumentation(pid int32, servicename string) error {
-	// 3. Create Drop-in, Reload and Restart
-	dropInConfig, err := NewSystemdDropin(pid)
-	if err != nil {
-		return fmt.Errorf("could not create drop-in config for process %d (%s): %w", pid, servicename, err)
-
-	}
-	if err := dropInConfig.applySystemdDropIn(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func (d *SystemdDropin) applySystemdDropIn() error {
 	if err := d.validate(); err != nil {
 		return fmt.Errorf("invalid drop-in config: %w", err)

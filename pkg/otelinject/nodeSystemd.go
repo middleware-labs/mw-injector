@@ -55,27 +55,17 @@ func (n *NodeSystemdInjector) Instrument() error {
 	for _, proc := range n.NodeProcs {
 		if !proc.IsSystemdProcess() {
 			continue
-		} else {
-			// pp.Println("Got a systemd process --> ", proc)
-			err := n.InjectOtelInstrumentation(&proc)
-			if err != nil {
-				errorsInstrumentation = errors.Join(errorsInstrumentation, err)
-			}
+		}
+		// pp.Println("Got a systemd process --> ", proc)
+		dropIn, err := NewSystemdDropin(proc.ProcessPID)
+		if err != nil {
+			errorsInstrumentation = errors.Join(errorsInstrumentation, err)
+			continue
+		}
+
+		if err := dropIn.applySystemdDropIn(); err != nil {
+			errorsInstrumentation = errors.Join(errorsInstrumentation, err)
 		}
 	}
 	return errorsInstrumentation
-}
-
-func (n *NodeSystemdInjector) InjectOtelInstrumentation(proc *discovery.NodeProcess) error {
-	// 3. Create Drop-in, Reload and Restart
-	dropInConfig, err := NewSystemdDropin(proc.ProcessPID)
-	if err != nil {
-		return fmt.Errorf("could not create drop-in config for process %d (%s): %w", proc.ProcessPID, proc.ServiceName, err)
-
-	}
-	if err := dropInConfig.applySystemdDropIn(); err != nil {
-		return err
-	}
-
-	return nil
 }

@@ -2,6 +2,7 @@ package otelinject
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/k0kubun/pp"
@@ -44,32 +45,47 @@ func (j *JavaSystemdInjector) ValidateAssets(baseDir string) bool {
 }
 
 func (j *JavaSystemdInjector) Instrument() error {
+	var errs error
 	if !j.Status.Ready {
-		return fmt.Errorf("java agent not found")
+		errs = errors.Join(errs, fmt.Errorf("java agent not found"))
+		return errs
 	}
 	// var errorsInstrumentation []string
 	for _, proc := range j.JavaProcs {
 		// Add support of IsSystemdProcess in javaprocess
 		pp.Println("Checking for process ", proc.ServiceName, " ", proc.ProcessPID)
 		isSystemd, unitName := checkSystemdStatus(proc.ProcessPID)
-		if isSystemd {
-			pp.Println("Process ", isSystemd, " is a systemd service, with unit name ", unitName)
-			pp.Println("Gonna inject here.")
-			pp.Println(proc)
-			dropIn, err := NewSystemdDropin(proc.ProcessPID)
-			if err != nil {
-				return fmt.Errorf("could not create a new dropIn, %w", err)
-			}
 
-			if err := dropIn.InjectOtelInstrumentation(proc.ProcessPID, unitName); err != nil {
-				return err
-			}
-
-		} else {
+		if !isSystemd {
 			continue
+		}
+		dropIn, err := NewSystemdDropin(proc.ProcessPID)
+		if err != nil {
+			errs = errors.Join(
+				errs,
+				fmt.Errorf(
+					"could not create a new dropIn for %s and pid %d, %w",
+					unitName,
+					proc.ProcessPID,
+					err,
+				),
+			)
+			continue
+		}
+
+		if err := dropIn.applySystemdDropIn(); err != nil {
+			errs = errors.Join(
+				errs,
+				fmt.Errorf(
+					"could not apply dropIn for %s and pid %d, %w",
+					unitName,
+					proc.ProcessPID,
+					err,
+				),
+			)
 		}
 
 	}
 
-	return nil
+	return errs
 }
