@@ -50,11 +50,11 @@ func (n *NodeSystemdInjector) Instrument() error {
 	}
 	var errorsInstrumentation error
 	for _, proc := range n.NodeProcs {
-		if !proc.IsSystemdProcess() {
+		isSystemd, cleanName := checkSystemdStatus(proc.ProcessPID)
+		if !isSystemd {
 			continue
 		}
-		// pp.Println("Got a systemd process --> ", proc)
-		dropIn, err := NewSystemdDropin(proc.ProcessPID)
+		dropIn, err := NewSystemdDropin(proc.ProcessPID, cleanName)
 		if err != nil {
 			errorsInstrumentation = errors.Join(errorsInstrumentation, err)
 			continue

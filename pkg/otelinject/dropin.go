@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
 )
 
 type SystemdDropin struct {
@@ -16,12 +15,7 @@ type SystemdDropin struct {
 	OtlpHeaders      string `json:"OTEL_EXPORTER_OTLP_HEADERS"`
 }
 
-func NewSystemdDropin(processPID int32) (*SystemdDropin, error) {
-	isSystemd, cleanName := checkSystemdStatus(processPID)
-	if !isSystemd {
-		return nil, fmt.Errorf("could not extract service name from cgroup, cannot create drop-in")
-	}
-
+func NewSystemdDropin(processPID int32, cleanName string) (*SystemdDropin, error) {
 	// Get values from Environment
 	apiKey := os.Getenv("MW_API_KEY")
 	target := os.Getenv("MW_TARGET")
