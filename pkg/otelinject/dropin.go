@@ -70,6 +70,55 @@ Environment="OTEL_EXPORTER_OTLP_HEADERS=%s"
 	return nil
 }
 
+func (d *SystemdDropin) applySystemdDropInPython() error {
+	if err := d.validate(); err != nil {
+		return fmt.Errorf("invalid drop-in config: %w", err)
+	}
+
+	content := fmt.Sprintf(`[Service]
+Environment="LD_PRELOAD=%s"
+Environment="PYTHON_AUTO_INSTRUMENTATION_AGENT_PATH_PREFIX=/opt/otel-python-agent"
+Environment="OTEL_SERVICE_NAME=%s"
+Environment="OTEL_EXPORTER_OTLP_ENDPOINT=%s"
+Environment="OTEL_EXPORTER_OTLP_HEADERS=%s"
+Environment="OTEL_TRACES_EXPORTER=otlp"
+Environment="OTEL_METRICS_EXPORTER=otlp"
+Environment="OTEL_LOGS_EXPORTER=otlp"
+
+# Debug logging
+Environment="OTEL_INJECTOR_LOG_LEVEL=info"
+`,
+		shellescape(d.LdPreload),
+		shellescape(d.ServiceName),
+		shellescape(d.ExporterEndpoint),
+		shellescape(d.OtlpHeaders),
+	)
+
+	// 2. Setup Directory: /etc/systemd/system/<service>.d/
+	dropInDir := fmt.Sprintf("/etc/systemd/system/%s.service.d", d.ServiceName)
+	if err := os.MkdirAll(dropInDir, 0755); err != nil {
+		return fmt.Errorf("failed to create drop-in dir: %w", err)
+	}
+
+	// 3. Write File
+	filename := filepath.Join(dropInDir, "middleware-otel.conf")
+	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write drop-in file: %w", err)
+	}
+
+	// 4. Reload Daemon
+	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
+		return fmt.Errorf("daemon-reload failed: %s: %w", string(out), err)
+	}
+
+	// 5. Restart Service
+	if out, err := exec.Command("systemctl", "restart", "--no-block", fmt.Sprintf("%s.service", d.ServiceName)).CombinedOutput(); err != nil {
+		return fmt.Errorf("service restart failed: %s: %w", string(out), err)
+	}
+
+	return nil
+}
+
 func (d *SystemdDropin) validate() error {
 	blocked := []string{"user@", "session-", "init.scope", "dbus"}
 	for _, prefix := range blocked {
