@@ -77,7 +77,7 @@ func (d *SystemdDropin) applySystemdDropInPython() error {
 
 	content := fmt.Sprintf(`[Service]
 Environment="LD_PRELOAD=%s"
-Environment="PYTHON_AUTO_INSTRUMENTATION_AGENT_PATH_PREFIX=/opt/otel-python-agent"
+Environment="PYTHON_AUTO_INSTRUMENTATION_AGENT_PATH_PREFIX=%s"
 Environment="OTEL_SERVICE_NAME=%s"
 Environment="OTEL_EXPORTER_OTLP_ENDPOINT=%s"
 Environment="OTEL_EXPORTER_OTLP_HEADERS=%s"
@@ -89,12 +89,12 @@ Environment="OTEL_LOGS_EXPORTER=otlp"
 Environment="OTEL_INJECTOR_LOG_LEVEL=info"
 `,
 		shellescape(d.LdPreload),
+		shellescape(DefaultPythonAgentBasePath),
 		shellescape(d.ServiceName),
 		shellescape(d.ExporterEndpoint),
 		shellescape(d.OtlpHeaders),
 	)
 
-	// 2. Setup Directory: /etc/systemd/system/<service>.d/
 	dropInDir := fmt.Sprintf("/etc/systemd/system/%s.service.d", d.ServiceName)
 	if err := os.MkdirAll(dropInDir, 0755); err != nil {
 		return fmt.Errorf("failed to create drop-in dir: %w", err)

@@ -51,12 +51,22 @@ func (p *PythonSystemdInjector) Instrument() error {
 		return errs
 	}
 
+	// 1. DEDUPLICATION MAP
+	// Track which units we have already instrumented in this run to prevent
+	// cascading restarts for multi-process apps (e.g. Gunicorn w/ 4 workers).
+	processedUnits := make(map[string]bool)
 	for _, proc := range p.PythonProcs {
 		isSystemd, unitName := checkSystemdStatus(proc.ProcessPID)
 
 		if !isSystemd {
 			continue
 		}
+
+		if processedUnits[unitName] {
+			continue // We already handled this service, skip this worker PID
+		}
+
+		processedUnits[unitName] = true
 
 		dropIn, err := NewSystemdDropin(unitName)
 		if err != nil {
