@@ -34,6 +34,8 @@ type ServiceSetting struct {
 	ConfigPath        string `json:"config_path,omitempty"`
 	Instrumented      bool   `json:"instrumented"`
 	Key               string `json:"key"`
+	InstrumentThis    *bool  `json:"instrument_this,omitempty"`
+	ProcessManager    string `json:"process_manager,omitempty"`
 }
 
 // OSConfig represents the configuration and status for a specific OS (e.g., "linux").
@@ -175,8 +177,6 @@ func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
 
 	if proc.IsInContainer() {
 		serviceType = "docker"
-	} else if proc.IsGunicornProcess || proc.IsUvicornProcess {
-		serviceType = "wsgi/asgi"
 	} else if proc.IsCeleryProcess {
 		serviceType = "worker"
 	}
@@ -202,7 +202,8 @@ func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
 		Instrumented:      proc.HasPythonAgent,
 
 		// Metadata and Unique Key
-		Key: key,
+		Key:            key,
+		ProcessManager: proc.ProcessManager,
 	}
 }
 
