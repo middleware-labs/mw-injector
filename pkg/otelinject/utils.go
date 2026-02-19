@@ -7,8 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/k0kubun/pp"
 )
 
 const (
@@ -179,7 +177,6 @@ func ValidatePythonAgent(basePath string) PythonAgentStatus {
 	if len(status.Errors) > 0 {
 		status.Ready = false
 	}
-	pp.Println("PythonAgentStatus:", status)
 	return status
 }
 

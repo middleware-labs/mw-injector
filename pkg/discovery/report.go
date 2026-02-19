@@ -100,7 +100,6 @@ func GetAgentReportValue() (AgentReportValue, error) {
 
 	// Convert Python
 	for _, proc := range pythonProcs {
-		// pp.Println("Python process:", proc)
 		setting := convertPythonProcessToServiceSetting(proc)
 		settings[setting.Key] = setting
 	}
