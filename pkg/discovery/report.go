@@ -1,16 +1,13 @@
 package discovery
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os"
 	"runtime"
-	"time"
+
+	"github.com/k0kubun/pp"
 )
 
 const apiPathForAgentSetting = "api/v1/agent/public/setting/"
@@ -34,7 +31,7 @@ type ServiceSetting struct {
 	ConfigPath        string `json:"config_path,omitempty"`
 	Instrumented      bool   `json:"instrumented"`
 	Key               string `json:"key"`
-	InstrumentThis    *bool  `json:"instrument_this,omitempty"`
+	InstrumentThis    bool   `json:"instrument_this"` // I want this to default to false.
 	ProcessManager    string `json:"process_manager,omitempty"`
 }
 
@@ -303,54 +300,36 @@ func ReportStatus(
 		return err
 	}
 	baseURL := u.JoinPath(apiPathForAgentSetting, apiKey, hostname)
-	finalURL := baseURL.String()
+	// finalURL := baseURL.String()
 
+	client, err := NewAgentAPIClient(
+		AgentAPIClientConfig{
+			BaseURL:       baseURL.String(),
+			APIKey:        apiKey,
+			Version:       "v1",
+			InfraPlatform: infraPlatform,
+			Hostname:      hostname,
+		},
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to create api client for injector, ", err)
+	}
+
+	// Discovery
+	//---------------------------------------------------------------------
 	rawReportValue, err := GetAgentReportValue()
 	if err != nil {
 		return fmt.Errorf("failed to generate agent report value: %w", err)
 	}
 
-	rawConfigBytes, err := json.Marshal(rawReportValue)
-	if err != nil {
-		return fmt.Errorf("failed to marshal raw config payload: %w", err)
+	//---------------------------------------------------------------------
+	pp.Println(rawReportValue)
+	// Sending the report
+	// -----------------------------------------------------------------------------------------------
+	if err := client.ReportStatus(rawReportValue); err != nil {
+		return fmt.Errorf("failed to send report: %w", err)
 	}
-
-	encodedConfig := base64.StdEncoding.EncodeToString(rawConfigBytes)
-
-	payload := AgentSettingPayload{
-		Value: encodedConfig,
-		MetaData: map[string]interface{}{
-			"agent_version":  version,
-			"platform":       runtime.GOOS,
-			"infra_platform": fmt.Sprint(infraPlatform),
-			// c.collector == nil means the collector is NOT running (i.e., collectorRunning = 1)
-		},
-		// Config field is set to nil as per backend API pattern unless needed
-		Config: nil,
-	}
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal final request payload: %w", err)
-	}
-
-	// 4. Create and Execute the HTTP POST Request
-	req, err := http.NewRequest(http.MethodPost, finalURL, bytes.NewBuffer(payloadBytes))
-	if err != nil {
-		return fmt.Errorf("failed to create POST request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("agent status POST request failed for %s: %w", finalURL, err)
-	}
-	defer resp.Body.Close()
-
-	// 5. Check Status Code
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("agent status POST API returned non-200 status code: %d", resp.StatusCode)
-	}
-
+	// ----------------------------------------------------------------------------------------------
 	return nil
 }
