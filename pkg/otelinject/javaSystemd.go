@@ -101,3 +101,37 @@ func (j *JavaSystemdInjector) Uninstrument() error {
 	}
 	return errs
 }
+
+func (j *JavaSystemdInjector) InstrumentService(service discovery.ServiceSetting) error {
+	javaProcToInstrument := j.getJavaProcToInstrument(service.PID)
+	if javaProcToInstrument == nil {
+		return fmt.Errorf("could not find java process: %w running on the host", service)
+	}
+	isSystemd, unitName := checkSystemdStatus(javaProcToInstrument.ProcessPID)
+	if !isSystemd {
+		return fmt.Errorf("given java process is not a systemd process: %w", service)
+	}
+	dropIn, err := NewSystemdDropin(unitName)
+	if err != nil {
+		return fmt.Errorf(
+			"could not create a new dropIn for %s and pid %d, %w",
+			unitName,
+			service.PID,
+			err,
+		)
+	}
+	if err := dropIn.applySystemdDropIn(); err != nil {
+		return fmt.Errorf("could not apply dropIn for %s and pid %d, %w", unitName, service.PID, err)
+	}
+
+	return nil
+}
+
+func (j *JavaSystemdInjector) getJavaProcToInstrument(pid int32) *discovery.JavaProcess {
+	for _, proc := range j.JavaProcs {
+		if proc.ProcessPID == pid {
+			return &proc
+		}
+	}
+	return nil
+}
