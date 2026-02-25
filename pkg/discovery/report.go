@@ -6,6 +6,8 @@ import (
 	"os"
 	"runtime"
 	"strings"
+
+	"github.com/k0kubun/pp"
 )
 
 // ServiceSetting represents the detailed status for a single service/process.
@@ -103,6 +105,10 @@ func GetAgentReportValue() (AgentReportValue, error) {
 		settings[setting.Key] = setting
 	}
 
+	pp.Println("lets see the unit files")
+	for _, proc := range settings {
+		pp.Println("pid: ", proc.PID, "unitName: ", proc.SystemdUnit)
+	}
 	reportValue := AgentReportValue{
 		osKey: OSConfig{
 			AgentRestartStatus:          false,
@@ -135,6 +141,7 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 	key := fmt.Sprintf("host-node-%s", sanitize(proc.ServiceName))
 	serviceType := "system"
 
+	_, unitname := checkSystemdStatus(proc.ProcessPID)
 	// 2. Handle Container Infrastructure
 	if proc.IsInContainer() {
 		serviceType = "docker"
@@ -159,6 +166,7 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 		AgentPath:         proc.NodeAgentPath,
 		Instrumented:      proc.HasNodeAgent,
 		Key:               key,
+		SystemdUnit:       unitname,
 	}
 }
 
@@ -168,6 +176,8 @@ func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
 	key := fmt.Sprintf("host-python-%s", sanitize(proc.ServiceName))
 	// Determine the service type based on process manager or environment
 	serviceType := "system"
+
+	_, unitname := checkSystemdStatus(proc.ProcessPID)
 
 	if proc.IsInContainer() {
 		serviceType = "docker"
@@ -198,6 +208,7 @@ func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
 		// Metadata and Unique Key
 		Key:            key,
 		ProcessManager: proc.ProcessManager,
+		SystemdUnit:    unitname,
 	}
 }
 
@@ -256,7 +267,7 @@ func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
 	// e.g., key := naming.GenerateHostServiceKey(proc.ServiceName, "systemd", proc.PID)
 
 	key := fmt.Sprintf("host-java-%s", sanitize(proc.ServiceName))
-
+	_, unitname := checkSystemdStatus(proc.ProcessPID)
 	return ServiceSetting{
 		PID:               proc.ProcessPID,
 		ServiceName:       proc.ServiceName, // Uses the discovered ServiceName
@@ -273,6 +284,7 @@ func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
 		AgentPath:         proc.JavaAgentPath,
 		Instrumented:      proc.HasJavaAgent, // Can be refined
 		Key:               key,
+		SystemdUnit:       unitname,
 	}
 }
 
@@ -285,7 +297,6 @@ func detectDeploymentType(proc *JavaProcess) string {
 	}
 	return "standalone"
 }
-
 
 func FilterServices(services map[string]ServiceSetting, predicate func(ServiceSetting) bool) map[string]ServiceSetting {
 	result := make(map[string]ServiceSetting)
@@ -350,3 +361,44 @@ func sanitize(s string) string {
 	return strings.ToLower(strings.ReplaceAll(s, " ", "-"))
 }
 
+func checkSystemdStatus(pid int32) (bool, string) {
+	path := fmt.Sprintf("/proc/%d/cgroup", pid)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, ""
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		// Only look at the main systemd hierarchy or unified hierarchy (0::)
+		if !strings.Contains(line, ":name=systemd:") && !strings.HasPrefix(line, "0::") {
+			continue
+		}
+
+		// Extract the path part (everything after the second colon)
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		cgroupPath := parts[2]
+
+		// Split path into segments: /, user.slice, user@1000.service, app.slice, my-app.service
+		segments := strings.Split(cgroupPath, "/")
+
+		// REVERSE SEARCH: Find the *last* segment ending in .service
+		for i := len(segments) - 1; i >= 0; i-- {
+			segment := segments[i]
+			if strings.HasSuffix(segment, ".service") {
+				// FILTER: Ignore the generic user session service
+				if strings.HasPrefix(segment, "user@") {
+					continue
+				}
+
+				// Found a real service!
+				unitName := strings.TrimSuffix(segment, ".service")
+				return true, unitName
+			}
+		}
+	}
+	return false, ""
+}

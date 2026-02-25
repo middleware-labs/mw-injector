@@ -214,6 +214,11 @@ func (d *discoverer) processOnePython(ctx context.Context, proc *process.Process
 	// 3. SLOW PATH (Cache Miss) - Original Logic
 	// ==================================================================================
 
+	if d.isIgnoredSystemdProcess(pid) {
+		CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{Ignore: true})
+		return nil, nil
+	}
+
 	cmdline, _ := proc.Cmdline()
 	exe, _ := proc.Exe()
 	parentPID, _ := proc.Ppid()
@@ -925,6 +930,11 @@ func (d *discoverer) processOneNode(ctx context.Context, proc *process.Process, 
 	// 3. SLOW PATH (Cache Miss) - Original Logic
 	// ==================================================================================
 
+	if d.isIgnoredSystemdProcess(pid) {
+		CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{Ignore: true})
+		return nil, nil
+	}
+
 	cmdline, err := proc.Cmdline()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get cmdline for PID %d: %w", pid, err)
@@ -1411,10 +1421,24 @@ func (d *discoverer) worker(
 
 // processOne processes a single Java process
 func (d *discoverer) processOne(ctx context.Context, proc *DiscoveryCandidate, opts DiscoveryOptions) (*JavaProcess, error) {
-	// Get basic process information
 	if !proc.IsJavaProcess {
 		return nil, nil
 	}
+
+	pid := proc.Process.Pid
+	alignedTime := (proc.CreateTime / 1000) * 1000
+
+	// Honor ignore decisions cached by a previous scan
+	if cached, hit := GetCachedProcessMetadata(pid, alignedTime); hit && cached.Ignore {
+		return nil, nil
+	}
+
+	// Drop desktop/GUI processes before doing any expensive work
+	if d.isIgnoredSystemdProcess(pid) {
+		CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{Ignore: true})
+		return nil, nil
+	}
+
 	cmdline, err := proc.Process.Cmdline()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get cmdline for PID %d: %w", proc.Process.Pid, err)
