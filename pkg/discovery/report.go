@@ -3,18 +3,14 @@ package discovery
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"runtime"
-
-	"github.com/k0kubun/pp"
+	"strings"
 )
-
-const apiPathForAgentSetting = "api/v1/agent/public/setting/"
 
 // ServiceSetting represents the detailed status for a single service/process.
 type ServiceSetting struct {
-	PID               int    `json:"pid"`
+	PID               int32  `json:"pid"`
 	ServiceName       string `json:"service_name"`
 	Owner             string `json:"owner"`
 	Status            string `json:"status"`
@@ -135,7 +131,8 @@ func convertJavaContainerToServiceSetting(container DockerContainer) ServiceSett
 
 func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 	// 1. Generate a stable Key
-	key := fmt.Sprintf("host-%d", proc.ProcessPID)
+
+	key := fmt.Sprintf("host-node-%s", sanitize(proc.ServiceName))
 	serviceType := "system"
 
 	// 2. Handle Container Infrastructure
@@ -149,7 +146,7 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 	}
 
 	return ServiceSetting{
-		PID:               int(proc.ProcessPID),
+		PID:               proc.ProcessPID,
 		ServiceName:       proc.ServiceName,
 		Owner:             proc.ProcessOwner,
 		Status:            proc.Status,
@@ -167,8 +164,8 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 
 func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
 	// Generate a unique key for the service
-	key := fmt.Sprintf("host-%d", proc.ProcessPID)
 
+	key := fmt.Sprintf("host-python-%s", sanitize(proc.ServiceName))
 	// Determine the service type based on process manager or environment
 	serviceType := "system"
 
@@ -179,7 +176,7 @@ func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
 	}
 
 	return ServiceSetting{
-		PID:            int(proc.ProcessPID),
+		PID:            proc.ProcessPID,
 		ServiceName:    proc.ServiceName,
 		Owner:          proc.ProcessOwner,
 		Status:         proc.Status,
@@ -257,10 +254,11 @@ func convertNodeContainerToServiceSetting(container DockerContainer) ServiceSett
 func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
 	// Generate a unique key for the service. The naming package helps here.
 	// e.g., key := naming.GenerateHostServiceKey(proc.ServiceName, "systemd", proc.PID)
-	key := fmt.Sprintf("host-%d", proc.ProcessPID)
+
+	key := fmt.Sprintf("host-java-%s", sanitize(proc.ServiceName))
 
 	return ServiceSetting{
-		PID:               int(proc.ProcessPID),
+		PID:               proc.ProcessPID,
 		ServiceName:       proc.ServiceName, // Uses the discovered ServiceName
 		Owner:             proc.ProcessOwner,
 		Status:            proc.Status,
@@ -288,48 +286,67 @@ func detectDeploymentType(proc *JavaProcess) string {
 	return "standalone"
 }
 
-func ReportStatus(
-	hostname string,
-	apiKey string,
-	urlForConfigCheck string,
-	version string,
-	infraPlatform string,
-) error {
-	u, err := url.Parse(urlForConfigCheck)
-	if err != nil {
-		return err
-	}
-	baseURL := u.JoinPath(apiPathForAgentSetting, apiKey, hostname)
-	// finalURL := baseURL.String()
 
-	client, err := NewAgentAPIClient(
-		AgentAPIClientConfig{
-			BaseURL:       baseURL.String(),
-			APIKey:        apiKey,
-			Version:       "v1",
-			InfraPlatform: infraPlatform,
-			Hostname:      hostname,
-		},
-	)
-
-	if err != nil {
-		return fmt.Errorf("failed to create api client for injector, ", err)
+func FilterServices(services map[string]ServiceSetting, predicate func(ServiceSetting) bool) map[string]ServiceSetting {
+	result := make(map[string]ServiceSetting)
+	for k, v := range services {
+		if predicate(v) {
+			result[k] = v
+		}
 	}
-
-	// Discovery
-	//---------------------------------------------------------------------
-	rawReportValue, err := GetAgentReportValue()
-	if err != nil {
-		return fmt.Errorf("failed to generate agent report value: %w", err)
-	}
-
-	//---------------------------------------------------------------------
-	pp.Println(rawReportValue)
-	// Sending the report
-	// -----------------------------------------------------------------------------------------------
-	if err := client.ReportStatus(rawReportValue); err != nil {
-		return fmt.Errorf("failed to send report: %w", err)
-	}
-	// ----------------------------------------------------------------------------------------------
-	return nil
+	return result
 }
+
+func And(predicates ...func(ServiceSetting) bool) func(ServiceSetting) bool {
+	return func(s ServiceSetting) bool {
+		for _, p := range predicates {
+			if !p(s) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+func FilterInstrumentable(
+	storedSettings map[string]ServiceSetting, // Coming from the database
+	currentSettings map[string]ServiceSetting, // Coming from the live system
+) map[string]ServiceSetting {
+	// Build a lookup index from current settings keyed by (service_name, language)
+	// since PIDs change across restarts, making key-based matching unreliable.
+	type serviceIdentity struct {
+		ServiceName string
+		Language    string
+	}
+	currentIndex := make(map[serviceIdentity]ServiceSetting, len(currentSettings))
+	for _, current := range currentSettings {
+		id := serviceIdentity{current.ServiceName, current.Language}
+		currentIndex[id] = current
+	}
+
+	result := make(map[string]ServiceSetting)
+	for _, stored := range storedSettings {
+		if !stored.InstrumentThis {
+			continue
+		}
+
+		id := serviceIdentity{stored.ServiceName, stored.Language}
+		current, exists := currentIndex[id]
+		if !exists {
+			// Was marked for instrumentation but is no longer running
+			continue
+		}
+
+		// Use current (live) entry for fresh PID/status/paths,
+		// but carry over InstrumentThis from the stored setting
+		current.InstrumentThis = true
+		result[current.Key] = current
+	}
+
+	return result
+}
+
+func sanitize(s string) string {
+	return strings.ToLower(strings.ReplaceAll(s, " ", "-"))
+}
+

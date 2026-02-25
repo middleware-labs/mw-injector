@@ -84,3 +84,38 @@ func (n *NodeSystemdInjector) Uninstrument() error {
 	}
 	return errs
 }
+
+func (n *NodeSystemdInjector) InstrumentService(service discovery.ServiceSetting) error {
+	nodeProcToInstrument := n.getNodeProcToInstrument(service.PID)
+	if nodeProcToInstrument == nil {
+		return fmt.Errorf("could not node java process: %w running on the host", service)
+	}
+	isSystemd, unitName := checkSystemdStatus(nodeProcToInstrument.ProcessPID)
+	if !isSystemd {
+		return fmt.Errorf("given node process is not a systemd process: %w", service)
+	}
+	dropIn, err := NewSystemdDropin(unitName)
+	if err != nil {
+		return fmt.Errorf(
+			"could not create a new dropIn for %s and pid %d, %w",
+			unitName,
+			service.PID,
+			err,
+		)
+	}
+	if err := dropIn.applySystemdDropIn(); err != nil {
+		return fmt.Errorf("could not apply dropIn for %s and pid %d, %w", unitName, service.PID, err)
+	}
+
+	return nil
+
+}
+
+func (n *NodeSystemdInjector) getNodeProcToInstrument(pid int32) *discovery.NodeProcess {
+	for _, proc := range n.NodeProcs {
+		if proc.ProcessPID == pid {
+			return &proc
+		}
+	}
+	return nil
+}

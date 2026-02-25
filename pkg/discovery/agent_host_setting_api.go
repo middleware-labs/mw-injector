@@ -11,12 +11,14 @@ import (
 	"time"
 
 	"github.com/k0kubun/pp"
+	"moul.io/http2curl"
 )
 
 const apiPathForAgentHostSettings = "api/v1/agent/public/setting/"
 
 type AgentAPIClient interface {
 	ReportStatus(reportValue AgentReportValue) error
+	GetAgentHostSettings() (map[string]interface{}, error)
 }
 
 type agentAPIClient struct {
@@ -91,11 +93,18 @@ func (c *agentAPIClient) ReportStatus(reportValue AgentReportValue) error {
 
 	pp.Println("URL:", u)
 	// 4. Build + execute HTTP POST
-	req, err := http.NewRequest(http.MethodPost, u.String(), bytes.NewBuffer(payloadBytes))
+	req, err := http.NewRequest(
+		http.MethodPost,
+		u.String(),
+		bytes.NewBuffer(payloadBytes),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create POST request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+
+	curlCommand, _ := http2curl.GetCurlCommand(req)
+	pp.Println("Whole post Curl: ", curlCommand.String())
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -109,4 +118,98 @@ func (c *agentAPIClient) ReportStatus(reportValue AgentReportValue) error {
 	}
 
 	return nil
+}
+
+func (c *agentAPIClient) GetAgentHostSettings() (map[string]interface{}, error) {
+	// 1. Build URL with query param
+	u, err := url.Parse(c.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base URL: %w", err)
+	}
+
+	q := u.Query()
+	q.Set("agent_type", "host")
+	u.RawQuery = q.Encode()
+
+	// 2. Build GET request
+	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GET request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+
+	// 3. Execute
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET request failed for %s: %w", u.String(), err)
+	}
+
+	pp.Println("response :", resp.Status)
+	defer resp.Body.Close()
+
+	// 4. Check response
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	// 5. Decode response
+	// var settings AgentHostSettings
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return result, nil
+
+}
+
+func GetAutoInstrumentationSettings(res map[string]interface{}) (map[string]ServiceSetting, error) {
+	if res == nil {
+		return nil, fmt.Errorf("invalid response")
+	}
+	setting, ok := res["setting"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("missing or invalid 'setting' field")
+	}
+
+	config, ok := setting["config"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("missing or invalid 'config' field")
+	}
+
+	osConfig, ok := config[runtime.GOOS].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("no config found for OS: %s", runtime.GOOS)
+	}
+
+	rawSettings, ok := osConfig["auto_instrumentation_settings"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("missing or invalid 'auto_instrumentation_settings' field")
+	}
+
+	// Convert each entry into a ServiceSetting
+	result := make(map[string]ServiceSetting, len(rawSettings))
+	for key, val := range rawSettings {
+		entry, ok := val.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Re-marshal and unmarshal into ServiceSetting for clean type conversion
+		b, err := json.Marshal(entry)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal entry %q: %w", key, err)
+		}
+
+		var s ServiceSetting
+		if err := json.Unmarshal(b, &s); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal entry %q into ServiceSetting: %w", key, err)
+		}
+
+		result[key] = s
+	}
+
+	return result, nil
 }

@@ -121,3 +121,37 @@ func (p *PythonSystemdInjector) Uninstrument() error {
 	}
 	return errs
 }
+
+func (p *PythonSystemdInjector) InstrumentService(service discovery.ServiceSetting) error {
+	pythonProcToInstrument := p.getPythonProcToInstrument(service.PID)
+	if pythonProcToInstrument == nil {
+		return fmt.Errorf("could not find python process: %w running on the host", service)
+	}
+	isSystemd, unitName := checkSystemdStatus(pythonProcToInstrument.ProcessPID)
+	if !isSystemd {
+		return fmt.Errorf("given python process is not a systemd process: %w", service)
+	}
+	dropIn, err := NewSystemdDropin(unitName)
+	if err != nil {
+		return fmt.Errorf(
+			"could not create a new dropIn for python process %s and pid %d, %w",
+			unitName,
+			service.PID,
+			err,
+		)
+	}
+	if err := dropIn.applySystemdDropIn(); err != nil {
+		return fmt.Errorf("could not apply dropIn for %s and pid %d, %w", unitName, service.PID, err)
+	}
+
+	return nil
+}
+
+func (p *PythonSystemdInjector) getPythonProcToInstrument(pid int32) *discovery.PythonProcess {
+	for _, proc := range p.PythonProcs {
+		if proc.ProcessPID == pid {
+			return &proc
+		}
+	}
+	return nil
+}
