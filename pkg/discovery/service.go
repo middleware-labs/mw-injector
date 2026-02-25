@@ -65,21 +65,52 @@ func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string)
 	javaProc.ServiceName = "java-service"
 }
 
+// ignoredSystemdUnits is the set of systemd unit names whose processes
+// should be excluded from discovery entirely (desktop/GUI services, etc.).
+var ignoredSystemdUnits = map[string]bool{
+	"plasma-plasmashell": true,
+	"gnome-shell":        true,
+	"gnome-terminal":     true,
+	"xfce4-session":      true,
+	"dbus":               true,
+	"systemd":            true,
+	"init":               true,
+}
+
+// isIgnoredSystemdProcess returns true if the process's own systemd unit
+// (the innermost non-user .service in its cgroup path) is on the ignore list.
+func (d *discoverer) isIgnoredSystemdProcess(pid int32) bool {
+	path := fmt.Sprintf("/proc/%d/cgroup", pid)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.Contains(line, ":name=systemd:") && !strings.HasPrefix(line, "0::") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		segments := strings.Split(parts[2], "/")
+		for i := len(segments) - 1; i >= 0; i-- {
+			seg := segments[i]
+			if !strings.HasSuffix(seg, ".service") || strings.HasPrefix(seg, "user@") {
+				continue
+			}
+			// First real service segment from the right is the process's own unit.
+			return ignoredSystemdUnits[strings.TrimSuffix(seg, ".service")]
+		}
+	}
+	return false
+}
+
 func (d *discoverer) extractSystemdUnitName(pid int32) string {
 	path := fmt.Sprintf("/proc/%d/cgroup", pid)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
-	}
-
-	ignoredServices := map[string]bool{
-		"plasma-plasmashell": true,
-		"gnome-shell":        true,
-		"gnome-terminal":     true,
-		"xfce4-session":      true,
-		"dbus":               true,
-		"systemd":            true,
-		"init":               true,
 	}
 
 	lines := strings.Split(string(data), "\n")
@@ -99,14 +130,10 @@ func (d *discoverer) extractSystemdUnitName(pid int32) string {
 		for i := len(segments) - 1; i >= 0; i-- {
 			segment := segments[i]
 			if strings.HasSuffix(segment, ".service") {
-				// 1. Strip extension
 				unitName := strings.TrimSuffix(segment, ".service")
-
-				// 2. CHECK IGNORE LIST
-				if strings.HasPrefix(segment, "user@") || ignoredServices[unitName] {
+				if strings.HasPrefix(segment, "user@") || ignoredSystemdUnits[unitName] {
 					continue
 				}
-
 				return unitName
 			}
 		}
