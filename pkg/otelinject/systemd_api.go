@@ -35,51 +35,13 @@ func ReportStatus(
 	)
 
 	if err != nil {
-		return fmt.Errorf("failed to create api client for injector, ", err)
+		return fmt.Errorf("failed to create api client for injector: %w", err)
 	}
-
-	// // Download current HostSettings from PG DB
-	// agentHostSettings, err := client.GetAgentHostSettings()
-	// if err != nil {
-	// 	pp.Println("ERROR: %w", err)
-	// }
-
-	// Just take out Auto Instrumentation Settings
-	// autoInstrumentationSetting, err := discovery.GetAutoInstrumentationSettings(agentHostSettings)
-	// if err != nil {
-	// 	pp.Println("ERROR: %w", err)
-	// }
-
-	// Filter Auto Instrumentation Settings
-	// servicesToBeInstrumented := discovery.FilterServices(autoInstrumentationSetting, func(s discovery.ServiceSetting) bool {
-	// 	return s.InstrumentThis == true
-	// })
-
-	// pp.Println("Services to be instrumented:", servicesToBeInstrumented)
-	// pp.Println("AutoInstrumentationSetting:", autoInstrumentationSetting)
 
 	rawReportValue, err := discovery.GetAgentReportValue()
 	if err != nil {
 		return fmt.Errorf("failed to generate agent report value: %w", err)
 	}
-
-	// pp.Println("From DB:", autoInstrumentationSetting)
-	// pp.Println("Raw report value:", rawReportValue[runtime.GOOS].AutoInstrumentationSettings)
-
-	// servicesToBeInstrumented = discovery.FilterInstrumentable(autoInstrumentationSetting, rawReportValue[runtime.GOOS].AutoInstrumentationSettings)
-
-	// pp.Println("Finally, new we'd be instrumenting these: ", servicesToBeInstrumented)
-
-	// err = InjectServices(servicesToBeInstrumented)
-
-	// if err != nil {
-	// 	return fmt.Errorf("failed to instrument services: %w. %w", servicesToBeInstrumented, err)
-	// }
-	//---------------------------------------------------------------------
-	// Sending the report
-	//
-
-	// postInstrumentationReportValue, err := discovery.GetAgentReportValue()
 
 	if err := client.ReportStatus(rawReportValue); err != nil {
 		return fmt.Errorf("failed to send report: %w", err)

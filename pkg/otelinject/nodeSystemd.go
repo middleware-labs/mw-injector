@@ -50,7 +50,7 @@ func (n *NodeSystemdInjector) Instrument() error {
 	}
 	var errorsInstrumentation error
 	for _, proc := range n.NodeProcs {
-		isSystemd, cleanName := checkSystemdStatus(proc.ProcessPID)
+		isSystemd, cleanName := discovery.CheckSystemdStatus(proc.ProcessPID)
 		if !isSystemd {
 			continue
 		}
@@ -70,7 +70,7 @@ func (n *NodeSystemdInjector) Instrument() error {
 func (n *NodeSystemdInjector) Uninstrument() error {
 	var errs error
 	for _, proc := range n.NodeProcs {
-		isSystemd, cleanName := checkSystemdStatus(proc.ProcessPID)
+		isSystemd, cleanName := discovery.CheckSystemdStatus(proc.ProcessPID)
 		if !isSystemd {
 			continue
 		}
@@ -90,7 +90,7 @@ func (n *NodeSystemdInjector) InstrumentService(service discovery.ServiceSetting
 	if nodeProcToInstrument == nil {
 		return fmt.Errorf("could not node java process: %w running on the host", service)
 	}
-	isSystemd, unitName := checkSystemdStatus(nodeProcToInstrument.ProcessPID)
+	isSystemd, unitName := discovery.CheckSystemdStatus(nodeProcToInstrument.ProcessPID)
 	if !isSystemd {
 		return fmt.Errorf("given node process is not a systemd process: %w", service)
 	}
