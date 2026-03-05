@@ -56,7 +56,7 @@ func (p *PythonSystemdInjector) Instrument() error {
 	// cascading restarts for multi-process apps (e.g. Gunicorn w/ 4 workers).
 	processedUnits := make(map[string]bool)
 	for _, proc := range p.PythonProcs {
-		isSystemd, unitName := checkSystemdStatus(proc.ProcessPID)
+		isSystemd, unitName := discovery.CheckSystemdStatus(proc.ProcessPID)
 
 		if !isSystemd {
 			continue
@@ -102,7 +102,7 @@ func (p *PythonSystemdInjector) Instrument() error {
 func (p *PythonSystemdInjector) Uninstrument() error {
 	var errs error
 	for _, proc := range p.PythonProcs {
-		isSystemd, unitName := checkSystemdStatus(proc.ProcessPID)
+		isSystemd, unitName := discovery.CheckSystemdStatus(proc.ProcessPID)
 		if !isSystemd {
 			continue
 		}
@@ -127,7 +127,7 @@ func (p *PythonSystemdInjector) InstrumentService(service discovery.ServiceSetti
 	if pythonProcToInstrument == nil {
 		return fmt.Errorf("could not find python process: %w running on the host", service)
 	}
-	isSystemd, unitName := checkSystemdStatus(pythonProcToInstrument.ProcessPID)
+	isSystemd, unitName := discovery.CheckSystemdStatus(pythonProcToInstrument.ProcessPID)
 	if !isSystemd {
 		return fmt.Errorf("given python process is not a systemd process: %w", service)
 	}

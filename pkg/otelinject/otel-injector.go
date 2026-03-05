@@ -1,5 +1,7 @@
 package otelinject
 
+import "github.com/middleware-labs/java-injector/pkg/discovery"
+
 type Language string
 
 const (
@@ -12,5 +14,5 @@ type OtelInjector interface {
 	ValidateAssets(baseDir string) bool
 	Instrument() error
 	Uninstrument() error
-	InstrumentService() error
+	InstrumentService(discovery.ServiceSetting) error
 }

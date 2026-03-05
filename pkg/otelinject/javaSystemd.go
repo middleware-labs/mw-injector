@@ -48,7 +48,7 @@ func (j *JavaSystemdInjector) Instrument() error {
 		return errs
 	}
 	for _, proc := range j.JavaProcs {
-		isSystemd, unitName := checkSystemdStatus(proc.ProcessPID)
+		isSystemd, unitName := discovery.CheckSystemdStatus(proc.ProcessPID)
 
 		if !isSystemd {
 			continue
@@ -87,7 +87,7 @@ func (j *JavaSystemdInjector) Instrument() error {
 func (j *JavaSystemdInjector) Uninstrument() error {
 	var errs error
 	for _, proc := range j.JavaProcs {
-		isSystemd, unitName := checkSystemdStatus(proc.ProcessPID)
+		isSystemd, unitName := discovery.CheckSystemdStatus(proc.ProcessPID)
 		if !isSystemd {
 			continue
 		}
@@ -107,7 +107,7 @@ func (j *JavaSystemdInjector) InstrumentService(service discovery.ServiceSetting
 	if javaProcToInstrument == nil {
 		return fmt.Errorf("could not find java process: %w running on the host", service)
 	}
-	isSystemd, unitName := checkSystemdStatus(javaProcToInstrument.ProcessPID)
+	isSystemd, unitName := discovery.CheckSystemdStatus(javaProcToInstrument.ProcessPID)
 	if !isSystemd {
 		return fmt.Errorf("given java process is not a systemd process: %w", service)
 	}
