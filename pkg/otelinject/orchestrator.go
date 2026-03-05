@@ -1,9 +1,9 @@
 package otelinject
 
 import (
-	"errors"
 	"fmt"
 	"net/url"
+	"runtime"
 
 	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
@@ -88,76 +88,49 @@ func ReportStatus(
 	return nil
 }
 
-func InjectServices(services map[string]discovery.ServiceSetting) error {
-	var errs error
-
-	JavaSystemdInjector, err := NewJavaSystemdInjector()
+func InstrumentUnit(unitName string, lang Language) error {
+	dropIn, err := NewSystemdDropin(unitName)
+	pp.Println("Dropin created: ", dropIn)
 	if err != nil {
-		errs = errors.Join(
-			errs,
-			fmt.Errorf("could not create a new Java SystemD Injector %w", err),
-		)
-		return errs
+		return fmt.Errorf("failed to create systemd dropin: %w", err)
 	}
 
-	PythonSystemdInjector, err := NewPythonSystemdInjector()
-	if err != nil {
-		errs = errors.Join(
-			errs,
-			fmt.Errorf("could not create a new Python SystemD Injector %w", err),
-		)
-		return errs
-	}
-
-	NodeSystemdInjector, err := NewNodeSystemdInjector()
-	if err != nil {
-		errs = errors.Join(
-			errs,
-			fmt.Errorf("could not create a new Node SystemD Injector %w", err),
-		)
-	}
-
-	for _, service := range services {
-		pp.Println("Trying to instrument service:", service.ServiceName, service.PID)
-		switch service.Language {
-		case "java":
-			err := JavaSystemdInjector.InstrumentService(service)
-			if err != nil {
-				errs = errors.Join(
-					errs,
-					fmt.Errorf("could not instrument java service %s and pid %d, %w",
-						service.ServiceName, service.PID, err,
-					),
-				)
-			}
-		case "python":
-			err := PythonSystemdInjector.InstrumentService(service)
-			if err != nil {
-				errs = errors.Join(
-					errs,
-					fmt.Errorf("could not instrument python service %s and pid %d, %w",
-						service.ServiceName, service.PID, err,
-					),
-				)
-			}
-
-		case "node":
-			err := NodeSystemdInjector.InstrumentService(service)
-			if err != nil {
-				errs = errors.Join(
-					errs,
-					fmt.Errorf("could not instrument node service %s and pid %d, %w",
-						service.ServiceName, service.PID, err,
-					),
-				)
-			}
-		default:
-			errs = errors.Join(
-				errs,
-				fmt.Errorf("unsupported language %s", service.Language),
-			)
+	switch lang {
+	case LanguageJava:
+		if status := ValidateJavaAgent(""); !status.Ready {
+			return fmt.Errorf("java agent is not ready, %v", status.Errors)
 		}
-
+		return dropIn.applySystemdDropIn()
+	case LanguagePython:
+		if status := ValidatePythonAgent(""); !status.Ready {
+			return fmt.Errorf("python agent is not ready, %v", status.Errors)
+		}
+		return dropIn.applySystemdDropInPython()
+	case LanguageNode:
+		if status := ValidateNodeAgent(""); !status.Ready {
+			return fmt.Errorf("node agent is not ready, %v", status.Errors)
+		}
+		return dropIn.applySystemdDropIn()
+	default:
+		return fmt.Errorf("unsupported language %s", lang)
 	}
-	return errs
+}
+
+func UninstrumentUnit(unitName string) error {
+	return removeSystemdDropIn(unitName)
+}
+
+func ListUnits() ([]string, error) {
+	rawReportValue, err := discovery.GetAgentReportValue()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list units: %w ", err)
+	}
+
+	units := []string{}
+
+	for _, setting := range rawReportValue[runtime.GOOS].AutoInstrumentationSettings {
+		units = append(units, setting.SystemdUnit)
+	}
+
+	return units, nil
 }

@@ -145,7 +145,7 @@ func (c *agentAPIClient) GetAgentHostSettings() (map[string]interface{}, error) 
 		return nil, fmt.Errorf("GET request failed for %s: %w", u.String(), err)
 	}
 
-	pp.Println("response :", resp.Status)
+	// pp.Println("response :", resp.Status)
 	defer resp.Body.Close()
 
 	// 4. Check response
