@@ -25,6 +25,7 @@ type ServiceSetting struct {
 	MainClass         string `json:"main_class,omitempty"`
 	HasAgent          bool   `json:"has_agent"`
 	IsMiddlewareAgent bool   `json:"is_middleware_agent"`
+	AgentType         string `json:"agent_type,omitempty"`
 	AgentPath         string `json:"agent_path,omitempty"`
 	ConfigPath        string `json:"config_path,omitempty"`
 	Instrumented      bool   `json:"instrumented"`
@@ -202,6 +203,7 @@ func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
 		// Instrumentation Status
 		HasAgent:          proc.HasPythonAgent,
 		IsMiddlewareAgent: proc.IsMiddlewareAgent,
+		AgentType:         proc.PythonAgentType.String(),
 		AgentPath:         proc.PythonAgentPath,
 		Instrumented:      proc.HasPythonAgent,
 

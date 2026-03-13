@@ -14,6 +14,11 @@ import (
 	"github.com/shirou/gopsutil/v4/process"
 )
 
+const (
+	defaultLibOtelInjectorPath = "/usr/lib/opentelemetry/libotelinject.so"
+	defaultPythonAgentBasePath = "/opt/otel-python-agent"
+)
+
 type DiscoveryCandidate struct {
 	Process       *process.Process
 	Exe           string
@@ -202,6 +207,7 @@ func (d *discoverer) processOnePython(ctx context.Context, proc *process.Process
 			HasPythonAgent:        cached.HasAgent,
 			IsMiddlewareAgent:     cached.IsMiddlewareAgent,
 			PythonAgentPath:       cached.AgentPath,
+			PythonAgentType:       cached.PythonAgentType,
 			ContainerInfo:         cached.ContainerInfo, // Pre-resolved container info (includes Name!)
 
 			// Constants
@@ -323,8 +329,9 @@ func (d *discoverer) processOnePython(ctx context.Context, proc *process.Process
 		HasAgent:          pyProc.HasPythonAgent,
 		IsMiddlewareAgent: pyProc.IsMiddlewareAgent,
 		AgentPath:         pyProc.PythonAgentPath,
-		ContainerInfo:     pyProc.ContainerInfo, // Save the pointer containing the resolved Name
-		Owner:             pyProc.ProcessOwner,  // Save owner to avoid future lookup syscalls
+		PythonAgentType:   pyProc.PythonAgentType,
+		ContainerInfo:     pyProc.ContainerInfo,
+		Owner:             pyProc.ProcessOwner,
 	})
 
 	return pyProc, nil
@@ -481,17 +488,31 @@ func (d *discoverer) isGenericPythonName(name string) bool {
 func (d *discoverer) detectPythonInstrumentation(pyProc *PythonProcess, cmdArgs []string) {
 	cmdline := strings.Join(cmdArgs, " ")
 
-	// Check for wrapper execution
+	// Check 1: opentelemetry-instrument wrapper in cmdline
 	if strings.Contains(cmdline, "opentelemetry-instrument") {
 		pyProc.HasPythonAgent = true
+		pyProc.PythonAgentType = PythonAgentOpenTelemetry
 	}
 
-	// Check environment for auto-instrumentation
+	// Check 2 & 3: read /proc/<PID>/environ once for all env-based signals
 	environPath := fmt.Sprintf("/proc/%d/environ", pyProc.ProcessPID)
 	if data, err := os.ReadFile(environPath); err == nil {
-		if strings.Contains(string(data), "PYTHONPATH") && strings.Contains(string(data), "mw_bootstrap") {
+		env := string(data)
+
+		// Check 2: MW pip/manual instrumentation — mw_bootstrap injected into PYTHONPATH
+		if strings.Contains(env, "PYTHONPATH") && strings.Contains(env, "mw_bootstrap") {
 			pyProc.HasPythonAgent = true
 			pyProc.IsMiddlewareAgent = true
+			pyProc.PythonAgentType = PythonAgentMiddleware
+		}
+
+		// Check 3: OTel systemd drop-in — LD_PRELOAD injector approach
+		// applySystemdDropInPython sets these two env vars; the agent is OTel's, not MW's
+		if strings.Contains(env, "PYTHON_AUTO_INSTRUMENTATION_AGENT_PATH_PREFIX=") &&
+			strings.Contains(env, "LD_PRELOAD="+defaultLibOtelInjectorPath) {
+			pyProc.HasPythonAgent = true
+			pyProc.PythonAgentType = PythonAgentOtelInjector
+			pyProc.PythonAgentPath = defaultPythonAgentBasePath
 		}
 	}
 }

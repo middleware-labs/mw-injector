@@ -15,6 +15,7 @@ type ProcessCacheEntry struct {
 	HasAgent          bool
 	IsMiddlewareAgent bool
 	AgentPath         string
+	PythonAgentType   PythonAgentType
 	Owner             string
 	ContainerInfo     *ContainerInfo
 	Ignore            bool
