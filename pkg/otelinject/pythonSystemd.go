@@ -106,7 +106,6 @@ func (p *PythonSystemdInjector) Uninstrument() error {
 		if !isSystemd {
 			continue
 		}
-
 		if err := removeSystemdDropIn(unitName); err != nil {
 			errs = errors.Join(
 				errs,

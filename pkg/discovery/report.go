@@ -141,7 +141,7 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 	key := fmt.Sprintf("host-node-%s", sanitize(proc.ServiceName))
 	serviceType := "system"
 
-	_, unitname := checkSystemdStatus(proc.ProcessPID)
+	_, unitname := CheckSystemdStatus(proc.ProcessPID)
 	// 2. Handle Container Infrastructure
 	if proc.IsInContainer() {
 		serviceType = "docker"
@@ -177,7 +177,7 @@ func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
 	// Determine the service type based on process manager or environment
 	serviceType := "system"
 
-	_, unitname := checkSystemdStatus(proc.ProcessPID)
+	_, unitname := CheckSystemdStatus(proc.ProcessPID)
 
 	if proc.IsInContainer() {
 		serviceType = "docker"
@@ -267,7 +267,7 @@ func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
 	// e.g., key := naming.GenerateHostServiceKey(proc.ServiceName, "systemd", proc.PID)
 
 	key := fmt.Sprintf("host-java-%s", sanitize(proc.ServiceName))
-	_, unitname := checkSystemdStatus(proc.ProcessPID)
+	_, unitname := CheckSystemdStatus(proc.ProcessPID)
 	return ServiceSetting{
 		PID:               proc.ProcessPID,
 		ServiceName:       proc.ServiceName, // Uses the discovered ServiceName
@@ -361,7 +361,7 @@ func sanitize(s string) string {
 	return strings.ToLower(strings.ReplaceAll(s, " ", "-"))
 }
 
-func checkSystemdStatus(pid int32) (bool, string) {
+func CheckSystemdStatus(pid int32) (bool, string) {
 	path := fmt.Sprintf("/proc/%d/cgroup", pid)
 	data, err := os.ReadFile(path)
 	if err != nil {
