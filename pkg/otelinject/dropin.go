@@ -106,7 +106,7 @@ Environment="OTEL_INJECTOR_LOG_LEVEL=info"
 		shellescape(d.OtlpHeaders),
 	)
 
-	dropInDir := fmt.Sprintf("/etc/systemd/system/%s.service.d", d.ServiceName)
+	dropInDir := fmt.Sprintf("/etc/systemd/system/%s.d", d.ServiceName)
 	if err := os.MkdirAll(dropInDir, 0755); err != nil {
 		return fmt.Errorf("failed to create drop-in dir: %w", err)
 	}
@@ -123,7 +123,7 @@ Environment="OTEL_INJECTOR_LOG_LEVEL=info"
 	}
 
 	// 5. Restart Service
-	if out, err := exec.Command("systemctl", "restart", "--no-block", fmt.Sprintf("%s.service", d.ServiceName)).CombinedOutput(); err != nil {
+	if out, err := exec.Command("systemctl", "restart", "--no-block", fmt.Sprintf("%s", d.ServiceName)).CombinedOutput(); err != nil {
 		return fmt.Errorf("service restart failed: %s: %w", string(out), err)
 	}
 
@@ -157,9 +157,8 @@ func (d *SystemdDropin) validate() error {
 }
 
 func removeSystemdDropIn(serviceName string) error {
-	dropInDir := fmt.Sprintf("/etc/systemd/system/%s.d", serviceName)
+	dropInDir := fmt.Sprintf("/etc/systemd/system/%s.service.d", serviceName)
 	dropInPath := filepath.Join(dropInDir, "middleware-otel.conf")
-
 	if _, err := os.Stat(dropInPath); err != nil {
 		return fmt.Errorf("drop-in not found for %s: %w", serviceName, err)
 	}
@@ -169,9 +168,15 @@ func removeSystemdDropIn(serviceName string) error {
 	}
 
 	// Remove directory if empty
-	files, _ := os.ReadDir(dropInDir)
+	files, err := os.ReadDir(dropInDir)
+	if err != nil {
+		return fmt.Errorf("error in reading the dropin dir %v: %w", dropInDir, err)
+	}
 	if len(files) == 0 {
-		os.Remove(dropInDir)
+		err := os.Remove(dropInDir)
+		if err != nil {
+			return fmt.Errorf("error in removing the dropin directory: %w", err)
+		}
 	}
 
 	// Reload and restart
