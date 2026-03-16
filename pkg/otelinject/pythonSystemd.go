@@ -101,11 +101,16 @@ func (p *PythonSystemdInjector) Instrument() error {
 
 func (p *PythonSystemdInjector) Uninstrument() error {
 	var errs error
+	processedUnits := make(map[string]bool)
 	for _, proc := range p.PythonProcs {
 		isSystemd, unitName := discovery.CheckSystemdStatus(proc.ProcessPID)
 		if !isSystemd {
 			continue
 		}
+		if processedUnits[unitName] {
+			continue
+		}
+		processedUnits[unitName] = true
 		if err := removeSystemdDropIn(unitName); err != nil {
 			errs = errors.Join(
 				errs,
@@ -124,11 +129,11 @@ func (p *PythonSystemdInjector) Uninstrument() error {
 func (p *PythonSystemdInjector) InstrumentService(service discovery.ServiceSetting) error {
 	pythonProcToInstrument := p.getPythonProcToInstrument(service.PID)
 	if pythonProcToInstrument == nil {
-		return fmt.Errorf("could not find python process: %w running on the host", service)
+		return fmt.Errorf("could not find python process: %v running on the host", service)
 	}
 	isSystemd, unitName := discovery.CheckSystemdStatus(pythonProcToInstrument.ProcessPID)
 	if !isSystemd {
-		return fmt.Errorf("given python process is not a systemd process: %w", service)
+		return fmt.Errorf("given python process is not a systemd process: %v", service)
 	}
 	dropIn, err := NewSystemdDropin(unitName)
 	if err != nil {
@@ -139,7 +144,7 @@ func (p *PythonSystemdInjector) InstrumentService(service discovery.ServiceSetti
 			err,
 		)
 	}
-	if err := dropIn.applySystemdDropIn(); err != nil {
+	if err := dropIn.applySystemdDropInPython(); err != nil {
 		return fmt.Errorf("could not apply dropIn for %s and pid %d, %w", unitName, service.PID, err)
 	}
 

@@ -5,7 +5,6 @@ import (
 	"net/url"
 	"runtime"
 
-	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
 )
 
@@ -46,13 +45,11 @@ func ReportStatus(
 	if err := client.ReportStatus(rawReportValue); err != nil {
 		return fmt.Errorf("failed to send report: %w", err)
 	}
-	pp.Println(rawReportValue)
 	return nil
 }
 
 func InstrumentUnit(unitName string, lang Language) error {
 	dropIn, err := NewSystemdDropin(unitName)
-	pp.Println("Dropin created: ", dropIn)
 	if err != nil {
 		return fmt.Errorf("failed to create systemd dropin: %w", err)
 	}

@@ -6,8 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/k0kubun/pp"
 )
 
 type SystemdDropin struct {
@@ -35,7 +33,6 @@ func NewSystemdDropin(cleanName string) (*SystemdDropin, error) {
 }
 
 func (d *SystemdDropin) applySystemdDropIn() error {
-	pp.Println("applySystemdDropIn: ", d)
 	if err := d.validate(); err != nil {
 		return fmt.Errorf("invalid drop-in config: %w", err)
 	}
@@ -57,29 +54,21 @@ Environment="OTEL_EXPORTER_OTLP_HEADERS=%s"
 		return fmt.Errorf("failed to create drop-in dir: %w", err)
 	}
 
-	pp.Println("DropInDir created: ", dropInDir)
 	// 3. Write File
 	filename := filepath.Join(dropInDir, "middleware-otel.conf")
 	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
 		return fmt.Errorf("failed to write drop-in file: %w", err)
 	}
 
-	pp.Println("File written: ", filename)
-
 	// 4. Reload Daemon
 	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
 		return fmt.Errorf("daemon-reload failed: %s: %w", string(out), err)
 	}
 
-	pp.Println("Daemon reloaded")
-
 	// 5. Restart Service
-	pp.Println("Dropin: ", d)
 	if out, err := exec.Command("systemctl", "restart", "--no-block", fmt.Sprintf("%s", d.ServiceName)).CombinedOutput(); err != nil {
 		return fmt.Errorf("service restart failed: %s: %w", string(out), err)
 	}
-
-	pp.Println("Service restarted")
 
 	return nil
 }

@@ -88,11 +88,11 @@ func (n *NodeSystemdInjector) Uninstrument() error {
 func (n *NodeSystemdInjector) InstrumentService(service discovery.ServiceSetting) error {
 	nodeProcToInstrument := n.getNodeProcToInstrument(service.PID)
 	if nodeProcToInstrument == nil {
-		return fmt.Errorf("could not node java process: %w running on the host", service)
+		return fmt.Errorf("could not find node process: %v running on the host", service)
 	}
 	isSystemd, unitName := discovery.CheckSystemdStatus(nodeProcToInstrument.ProcessPID)
 	if !isSystemd {
-		return fmt.Errorf("given node process is not a systemd process: %w", service)
+		return fmt.Errorf("given node process is not a systemd process: %v", service)
 	}
 	dropIn, err := NewSystemdDropin(unitName)
 	if err != nil {

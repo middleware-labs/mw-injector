@@ -105,11 +105,11 @@ func (j *JavaSystemdInjector) Uninstrument() error {
 func (j *JavaSystemdInjector) InstrumentService(service discovery.ServiceSetting) error {
 	javaProcToInstrument := j.getJavaProcToInstrument(service.PID)
 	if javaProcToInstrument == nil {
-		return fmt.Errorf("could not find java process: %w running on the host", service)
+		return fmt.Errorf("could not find java process: %v running on the host", service)
 	}
 	isSystemd, unitName := discovery.CheckSystemdStatus(javaProcToInstrument.ProcessPID)
 	if !isSystemd {
-		return fmt.Errorf("given java process is not a systemd process: %w", service)
+		return fmt.Errorf("given java process is not a systemd process: %v", service)
 	}
 	dropIn, err := NewSystemdDropin(unitName)
 	if err != nil {

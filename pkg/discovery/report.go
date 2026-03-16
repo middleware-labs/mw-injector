@@ -6,8 +6,6 @@ import (
 	"os"
 	"runtime"
 	"strings"
-
-	"github.com/k0kubun/pp"
 )
 
 // ServiceSetting represents the detailed status for a single service/process.
@@ -106,10 +104,6 @@ func GetAgentReportValue() (AgentReportValue, error) {
 		settings[setting.Key] = setting
 	}
 
-	pp.Println("lets see the unit files")
-	for _, proc := range settings {
-		pp.Println("pid: ", proc.PID, "unitName: ", proc.SystemdUnit)
-	}
 	reportValue := AgentReportValue{
 		osKey: OSConfig{
 			AgentRestartStatus:          false,
@@ -291,12 +285,15 @@ func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
 }
 
 func detectDeploymentType(proc *JavaProcess) string {
-	if proc.ProcessOwner != "root" && proc.ProcessOwner != os.Getenv("USER") {
-		return "systemd"
-	}
 	if proc.IsInContainer() {
 		return "docker"
 	}
+
+	isSystemd, _ := CheckSystemdStatus(proc.ProcessPID)
+	if isSystemd {
+		return "systemd"
+	}
+
 	return "standalone"
 }
 

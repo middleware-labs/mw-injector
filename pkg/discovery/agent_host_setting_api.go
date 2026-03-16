@@ -9,9 +9,6 @@ import (
 	"net/url"
 	"runtime"
 	"time"
-
-	"github.com/k0kubun/pp"
-	"moul.io/http2curl"
 )
 
 const apiPathForAgentHostSettings = "api/v1/agent/public/setting/"
@@ -67,7 +64,6 @@ func (c *agentAPIClient) ReportStatus(reportValue AgentReportValue) error {
 	if err != nil {
 		return fmt.Errorf("invalid base URL: %w", err)
 	}
-	// finalURL := u.JoinPath(apiPathForAgentHostSettings, c.apiKey, c.hostname).String()
 
 	// 2. Marshal + base64 encode the report value
 	rawBytes, err := json.Marshal(reportValue)
@@ -91,7 +87,6 @@ func (c *agentAPIClient) ReportStatus(reportValue AgentReportValue) error {
 		return fmt.Errorf("failed to marshal request payload: %w", err)
 	}
 
-	pp.Println("URL:", u)
 	// 4. Build + execute HTTP POST
 	req, err := http.NewRequest(
 		http.MethodPost,
@@ -102,9 +97,6 @@ func (c *agentAPIClient) ReportStatus(reportValue AgentReportValue) error {
 		return fmt.Errorf("failed to create POST request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-
-	curlCommand, _ := http2curl.GetCurlCommand(req)
-	pp.Println("Whole post Curl: ", curlCommand.String())
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -145,7 +137,6 @@ func (c *agentAPIClient) GetAgentHostSettings() (map[string]interface{}, error) 
 		return nil, fmt.Errorf("GET request failed for %s: %w", u.String(), err)
 	}
 
-	// pp.Println("response :", resp.Status)
 	defer resp.Body.Close()
 
 	// 4. Check response
@@ -154,7 +145,6 @@ func (c *agentAPIClient) GetAgentHostSettings() (map[string]interface{}, error) 
 	}
 
 	// 5. Decode response
-	// var settings AgentHostSettings
 
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
