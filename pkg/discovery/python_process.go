@@ -38,10 +38,9 @@ type PythonProcess struct {
 	ProcessManager    string `json:"python.process_manager,omitempty"` // gunicorn, supervisor, systemd
 
 	// Instrumentation detection
-	HasPythonAgent    bool            `json:"python.agent.present"`
-	PythonAgentPath   string          `json:"python.agent.path,omitempty"`
-	PythonAgentType   PythonAgentType `json:"python.agent.type"`
-	IsMiddlewareAgent bool            `json:"middleware.agent.detected"`
+	HasPythonAgent    bool   `json:"python.agent.present"`
+	PythonAgentPath   string `json:"python.agent.path,omitempty"`
+	IsMiddlewareAgent bool   `json:"middleware.agent.detected"`
 
 	// Service identification
 	ServiceName string `json:"service.name,omitempty"`
@@ -59,29 +58,11 @@ type PythonProcess struct {
 type PythonAgentType int
 
 const (
-	PythonAgentNone          PythonAgentType = iota
-	PythonAgentOpenTelemetry                  // opentelemetry-instrument wrapper
-	PythonAgentMiddleware                     // mw_bootstrap injected into PYTHONPATH
-	PythonAgentOtelInjector                   // LD_PRELOAD + libotelinject.so drop-in
+	PythonAgentNone PythonAgentType = iota
+	PythonAgentOpenTelemetry
+	PythonAgentMiddleware
 	PythonAgentOther
 )
-
-func (a PythonAgentType) String() string {
-	switch a {
-	case PythonAgentNone:
-		return "none"
-	case PythonAgentOpenTelemetry:
-		return "opentelemetry"
-	case PythonAgentMiddleware:
-		return "middleware"
-	case PythonAgentOtelInjector:
-		return "otel-injector"
-	case PythonAgentOther:
-		return "other"
-	default:
-		return "unknown"
-	}
-}
 
 // Methods for PythonProcess
 
