@@ -6,8 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/k0kubun/pp"
 )
 
 type SystemdDropin struct {
@@ -22,20 +20,15 @@ func NewSystemdDropin(cleanName string) (*SystemdDropin, error) {
 	apiKey := os.Getenv("MW_API_KEY")
 	target := os.Getenv("MW_TARGET")
 
-	// Normalize: strip .service suffix so path building is consistent
-	// regardless of whether callers pass "flask-app" or "flask-app.service"
-	unitName := strings.TrimSuffix(cleanName, ".service")
-
 	return &SystemdDropin{
 		LdPreload:        DefaultLibOtelInjectorPath,
-		ServiceName:      unitName,
+		ServiceName:      cleanName,
 		ExporterEndpoint: target,
 		OtlpHeaders:      fmt.Sprintf("Authorization=%s", apiKey),
 	}, nil
 }
 
 func (d *SystemdDropin) applySystemdDropIn() error {
-	pp.Println("applySystemdDropIn: ", d)
 	if err := d.validate(); err != nil {
 		return fmt.Errorf("invalid drop-in config: %w", err)
 	}
@@ -52,34 +45,27 @@ Environment="OTEL_EXPORTER_OTLP_HEADERS=%s"
 		shellescape(d.OtlpHeaders),
 	)
 
+	// 2. Setup Directory: /etc/systemd/system/<service>.d/
 	dropInDir := fmt.Sprintf("/etc/systemd/system/%s.service.d", d.ServiceName)
 	if err := os.MkdirAll(dropInDir, 0755); err != nil {
 		return fmt.Errorf("failed to create drop-in dir: %w", err)
 	}
 
-	pp.Println("DropInDir created: ", dropInDir)
 	// 3. Write File
 	filename := filepath.Join(dropInDir, "middleware-otel.conf")
 	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
 		return fmt.Errorf("failed to write drop-in file: %w", err)
 	}
 
-	pp.Println("File written: ", filename)
-
 	// 4. Reload Daemon
 	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
 		return fmt.Errorf("daemon-reload failed: %s: %w", string(out), err)
 	}
 
-	pp.Println("Daemon reloaded")
-
 	// 5. Restart Service
-	pp.Println("Dropin: ", d)
-	if out, err := exec.Command("systemctl", "restart", "--no-block", fmt.Sprintf("%s", d.ServiceName)).CombinedOutput(); err != nil {
+	if out, err := exec.Command("systemctl", "restart", "--no-block", fmt.Sprintf("%s.service", d.ServiceName)).CombinedOutput(); err != nil {
 		return fmt.Errorf("service restart failed: %s: %w", string(out), err)
 	}
-
-	pp.Println("Service restarted")
 
 	return nil
 }
@@ -126,7 +112,7 @@ Environment="OTEL_INJECTOR_LOG_LEVEL=info"
 	}
 
 	// 5. Restart Service
-	if out, err := exec.Command("systemctl", "restart", "--no-block", d.ServiceName).CombinedOutput(); err != nil {
+	if out, err := exec.Command("systemctl", "restart", "--no-block", fmt.Sprintf("%s.service", d.ServiceName)).CombinedOutput(); err != nil {
 		return fmt.Errorf("service restart failed: %s: %w", string(out), err)
 	}
 
@@ -160,13 +146,11 @@ func (d *SystemdDropin) validate() error {
 }
 
 func removeSystemdDropIn(serviceName string) error {
-	serviceName = strings.TrimSuffix(serviceName, ".service")
 	dropInDir := fmt.Sprintf("/etc/systemd/system/%s.service.d", serviceName)
 	dropInPath := filepath.Join(dropInDir, "middleware-otel.conf")
-	if _, err := os.Stat(dropInPath); os.IsNotExist(err) {
-		return nil // already uninstrumented, nothing to do
-	} else if err != nil {
-		return fmt.Errorf("failed to stat drop-in for %s: %w", serviceName, err)
+
+	if _, err := os.Stat(dropInPath); err != nil {
+		return fmt.Errorf("drop-in not found for %s: %w", serviceName, err)
 	}
 
 	if err := os.Remove(dropInPath); err != nil {
@@ -174,15 +158,9 @@ func removeSystemdDropIn(serviceName string) error {
 	}
 
 	// Remove directory if empty
-	files, err := os.ReadDir(dropInDir)
-	if err != nil {
-		return fmt.Errorf("error in reading the dropin dir %v: %w", dropInDir, err)
-	}
+	files, _ := os.ReadDir(dropInDir)
 	if len(files) == 0 {
-		err := os.Remove(dropInDir)
-		if err != nil {
-			return fmt.Errorf("error in removing the dropin directory: %w", err)
-		}
+		os.Remove(dropInDir)
 	}
 
 	// Reload and restart
@@ -190,7 +168,7 @@ func removeSystemdDropIn(serviceName string) error {
 		return fmt.Errorf("daemon-reload failed: %s: %w", string(out), err)
 	}
 
-	if out, err := exec.Command("systemctl", "restart", "--no-block", fmt.Sprintf("%s", serviceName)).CombinedOutput(); err != nil {
+	if out, err := exec.Command("systemctl", "restart", "--no-block", fmt.Sprintf("%s.service", serviceName)).CombinedOutput(); err != nil {
 		return fmt.Errorf("service restart failed: %s: %w", string(out), err)
 	}
 
