@@ -136,10 +136,13 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 	// 1. Generate a stable Key
 
 	key := fmt.Sprintf("host-node-%s", sanitize(proc.ServiceName))
+	isSystemd, unitname := CheckSystemdStatus(proc.ProcessPID)
 	serviceType := "system"
+	if isSystemd {
+		serviceType = "systemd"
+	}
 
-	_, unitname := CheckSystemdStatus(proc.ProcessPID)
-	// 2. Handle Container Infrastructure
+	// Handle Container Infrastructure
 	if proc.IsInContainer() {
 		serviceType = "docker"
 		if proc.ContainerInfo.ContainerID != "" {
@@ -149,16 +152,7 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 		}
 	}
 
-	agentType := ""
-	if proc.HasNodeAgent {
-		if strings.Contains(proc.NodeAgentPath, "libotelinject.so") {
-			agentType = "otel-injector"
-		} else if proc.IsMiddlewareAgent {
-			agentType = "middleware"
-		} else {
-			agentType = "opentelemetry"
-		}
-	}
+	agentType := deriveAgentType(proc.HasNodeAgent, proc.NodeAgentPath, proc.IsMiddlewareAgent)
 
 	return ServiceSetting{
 		PID:               proc.ProcessPID,
@@ -183,10 +177,11 @@ func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
 	// Generate a unique key for the service
 
 	key := fmt.Sprintf("host-python-%s", sanitize(proc.ServiceName))
-	// Determine the service type based on process manager or environment
+	isSystemd, unitname := CheckSystemdStatus(proc.ProcessPID)
 	serviceType := "system"
-
-	_, unitname := CheckSystemdStatus(proc.ProcessPID)
+	if isSystemd {
+		serviceType = "systemd"
+	}
 
 	if proc.IsInContainer() {
 		serviceType = "docker"
@@ -282,16 +277,7 @@ func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
 		deploymentType = "systemd"
 	}
 
-	agentType := ""
-	if proc.HasJavaAgent {
-		if strings.Contains(proc.JavaAgentPath, "libotelinject.so") {
-			agentType = "otel-injector"
-		} else if proc.IsMiddlewareAgent {
-			agentType = "middleware"
-		} else {
-			agentType = "opentelemetry"
-		}
-	}
+	agentType := deriveAgentType(proc.HasJavaAgent, proc.JavaAgentPath, proc.IsMiddlewareAgent)
 
 	return ServiceSetting{
 		PID:               proc.ProcessPID,
@@ -371,6 +357,19 @@ func FilterInstrumentable(
 	}
 
 	return result
+}
+
+func deriveAgentType(hasAgent bool, agentPath string, isMiddleware bool) string {
+	if !hasAgent {
+		return ""
+	}
+	if strings.Contains(agentPath, "libotelinject.so") {
+		return "otel-injector"
+	}
+	if isMiddleware {
+		return "middleware"
+	}
+	return "opentelemetry"
 }
 
 func sanitize(s string) string {

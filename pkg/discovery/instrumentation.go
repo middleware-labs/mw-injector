@@ -72,10 +72,10 @@ func (d *discoverer) checkEnvironmentForAgent(javaProc *JavaProcess) {
 		// Check LD_PRELOAD for OTel injector (systemd drop-in approach)
 		if strings.HasPrefix(env, "LD_PRELOAD=") {
 			value := strings.TrimPrefix(env, "LD_PRELOAD=")
-			if strings.Contains(value, "libotelinject.so") {
+			if path := extractLibOtelInjectPath(value); path != "" {
 				javaProc.HasJavaAgent = true
-				javaProc.IsMiddlewareAgent = true
-				javaProc.JavaAgentPath = value
+				javaProc.IsMiddlewareAgent = false
+				javaProc.JavaAgentPath = path
 				return
 			}
 		}
@@ -309,6 +309,17 @@ func (jp *JavaProcess) HasInstrumentation() bool {
 // HasMiddlewareInstrumentation checks specifically for Middleware instrumentation
 func (jp *JavaProcess) HasMiddlewareInstrumentation() bool {
 	return jp.IsMiddlewareAgent
+}
+
+// extractLibOtelInjectPath extracts the libotelinject.so path from a LD_PRELOAD value.
+// LD_PRELOAD can be colon-separated, e.g. /usr/lib/custom.so:/usr/lib/opentelemetry/libotelinject.so
+func extractLibOtelInjectPath(ldPreload string) string {
+	for _, p := range strings.Split(ldPreload, ":") {
+		if strings.Contains(p, "libotelinject.so") {
+			return p
+		}
+	}
+	return ""
 }
 
 // IsServerless checks if this appears to be a serverless deployment
