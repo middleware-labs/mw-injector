@@ -68,6 +68,17 @@ func (d *discoverer) checkEnvironmentForAgent(javaProc *JavaProcess) {
 				return
 			}
 		}
+
+		// Check LD_PRELOAD for OTel injector (systemd drop-in approach)
+		if strings.HasPrefix(env, "LD_PRELOAD=") {
+			value := strings.TrimPrefix(env, "LD_PRELOAD=")
+			if strings.Contains(value, "libotelinject.so") {
+				javaProc.HasJavaAgent = true
+				javaProc.IsMiddlewareAgent = true
+				javaProc.JavaAgentPath = value
+				return
+			}
+		}
 	}
 }
 

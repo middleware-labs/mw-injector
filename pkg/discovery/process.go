@@ -1361,6 +1361,17 @@ func (d *discoverer) checkNodeEnvironmentForAgent(nodeProc *NodeProcess) {
 				return
 			}
 		}
+
+		// Check LD_PRELOAD for OTel injector (systemd drop-in approach)
+		if strings.HasPrefix(env, "LD_PRELOAD=") {
+			value := strings.TrimPrefix(env, "LD_PRELOAD=")
+			if strings.Contains(value, "libotelinject.so") {
+				nodeProc.HasNodeAgent = true
+				nodeProc.IsMiddlewareAgent = true
+				nodeProc.NodeAgentPath = value
+				return
+			}
+		}
 	}
 }
 

@@ -149,17 +149,29 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 		}
 	}
 
+	agentType := ""
+	if proc.HasNodeAgent {
+		if strings.Contains(proc.NodeAgentPath, "libotelinject.so") {
+			agentType = "otel-injector"
+		} else if proc.IsMiddlewareAgent {
+			agentType = "middleware"
+		} else {
+			agentType = "opentelemetry"
+		}
+	}
+
 	return ServiceSetting{
 		PID:               proc.ProcessPID,
 		ServiceName:       proc.ServiceName,
 		Owner:             proc.ProcessOwner,
 		Status:            proc.Status,
 		Enabled:           true,
-		ServiceType:       serviceType, // Now correctly reports "docker"
+		ServiceType:       serviceType,
 		Language:          "node",
 		RuntimeVersion:    proc.ProcessRuntimeVersion,
 		HasAgent:          proc.HasNodeAgent,
 		IsMiddlewareAgent: proc.IsMiddlewareAgent,
+		AgentType:         agentType,
 		AgentPath:         proc.NodeAgentPath,
 		Instrumented:      proc.HasNodeAgent,
 		Key:               key,
@@ -270,6 +282,17 @@ func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
 		deploymentType = "systemd"
 	}
 
+	agentType := ""
+	if proc.HasJavaAgent {
+		if strings.Contains(proc.JavaAgentPath, "libotelinject.so") {
+			agentType = "otel-injector"
+		} else if proc.IsMiddlewareAgent {
+			agentType = "middleware"
+		} else {
+			agentType = "opentelemetry"
+		}
+	}
+
 	return ServiceSetting{
 		PID:               proc.ProcessPID,
 		ServiceName:       proc.ServiceName,
@@ -283,6 +306,7 @@ func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
 		MainClass:         proc.MainClass,
 		HasAgent:          proc.HasJavaAgent,
 		IsMiddlewareAgent: proc.IsMiddlewareAgent,
+		AgentType:         agentType,
 		AgentPath:         proc.JavaAgentPath,
 		Instrumented:      proc.HasJavaAgent,
 		Key:               key,
