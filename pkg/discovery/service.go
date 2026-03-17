@@ -1,12 +1,9 @@
 package discovery
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
-
 )
 
 func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string) {
@@ -65,53 +62,30 @@ func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string)
 	javaProc.ServiceName = "java-service"
 }
 
+// ignoredSystemdUnits is the set of systemd unit names whose processes
+// should be excluded from discovery entirely (desktop/GUI services, etc.).
+var ignoredSystemdUnits = map[string]bool{
+	"plasma-plasmashell": true,
+	"gnome-shell":        true,
+	"gnome-terminal":     true,
+	"xfce4-session":      true,
+	"dbus":               true,
+	"systemd":            true,
+	"init":               true,
+}
+
+// isIgnoredSystemdProcess returns true if the process's systemd unit is on the ignore list.
+func (d *discoverer) isIgnoredSystemdProcess(pid int32) bool {
+	name, found := parseCgroupUnitName(pid)
+	return found && ignoredSystemdUnits[name]
+}
+
 func (d *discoverer) extractSystemdUnitName(pid int32) string {
-	path := fmt.Sprintf("/proc/%d/cgroup", pid)
-	data, err := os.ReadFile(path)
-	if err != nil {
+	name, found := parseCgroupUnitName(pid)
+	if !found || ignoredSystemdUnits[name] {
 		return ""
 	}
-
-	ignoredServices := map[string]bool{
-		"plasma-plasmashell": true,
-		"gnome-shell":        true,
-		"gnome-terminal":     true,
-		"xfce4-session":      true,
-		"dbus":               true,
-		"systemd":            true,
-		"init":               true,
-	}
-
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		if !strings.Contains(line, ":name=systemd:") && !strings.HasPrefix(line, "0::") {
-			continue
-		}
-
-		parts := strings.SplitN(line, ":", 3)
-		if len(parts) < 3 {
-			continue
-		}
-		cgroupPath := parts[2]
-		segments := strings.Split(cgroupPath, "/")
-
-		// REVERSE SEARCH
-		for i := len(segments) - 1; i >= 0; i-- {
-			segment := segments[i]
-			if strings.HasSuffix(segment, ".service") {
-				// 1. Strip extension
-				unitName := strings.TrimSuffix(segment, ".service")
-
-				// 2. CHECK IGNORE LIST
-				if strings.HasPrefix(segment, "user@") || ignoredServices[unitName] {
-					continue
-				}
-
-				return unitName
-			}
-		}
-	}
-	return ""
+	return name
 }
 
 func (d *discoverer) isGenericJavaName(name string) bool {
