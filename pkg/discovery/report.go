@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -52,26 +53,24 @@ type AgentSettingPayload struct {
 func GetAgentReportValue() (AgentReportValue, error) {
 	// --- 1. Perform Process Discovery ---
 	ctx := context.Background()
+	var discoverErrs error
 
 	// a) Host Processes (Java)
-	// Java has its own optimization from your previous PR
 	processes, err := FindAllJavaProcesses(ctx)
 	if err != nil {
-		fmt.Printf("Error discovering Java processes: %v\n", err)
+		discoverErrs = errors.Join(discoverErrs, fmt.Errorf("java discovery failed: %w", err))
 	}
 
 	// b) Node Processes
-	// Internally calls GetCachedProcessMetadata -> Updates LastSeen timestamp
 	nodeProcs, err := FindAllNodeProcesses(ctx)
 	if err != nil {
-		fmt.Printf("Error discovering Node processes: %v\n", err)
+		discoverErrs = errors.Join(discoverErrs, fmt.Errorf("node discovery failed: %w", err))
 	}
 
 	// c) Python Processes
-	// Internally calls GetCachedProcessMetadata -> Updates LastSeen timestamp
 	pythonProcs, err := FindAllPythonProcess(ctx)
 	if err != nil {
-		fmt.Printf("Error discovering Python processes: %v\n", err)
+		discoverErrs = errors.Join(discoverErrs, fmt.Errorf("python discovery failed: %w", err))
 	}
 
 	// --- 2. SWEEP (Garbage Collection) ---
@@ -112,13 +111,16 @@ func GetAgentReportValue() (AgentReportValue, error) {
 		},
 	}
 
-	return reportValue, nil
+	return reportValue, discoverErrs
 }
 
 // Placeholder for logic that converts discovery.Container to ServiceSetting
 func convertJavaContainerToServiceSetting(container DockerContainer) ServiceSetting {
 	// Generate a unique key for the container service
-	key := container.ContainerID[:12]
+	key := container.ContainerID
+	if len(key) >= 12 {
+		key = key[:12]
+	}
 	// You can access the embedded JavaProcess like this: container.JavaProcess
 
 	return ServiceSetting{
@@ -257,20 +259,24 @@ func convertNodeContainerToServiceSetting(container DockerContainer) ServiceSett
 	}
 }
 
-// Placeholder for logic that converts discovery.JavaProcess to ServiceSetting
 func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
-	// Generate a unique key for the service. The naming package helps here.
-	// e.g., key := naming.GenerateHostServiceKey(proc.ServiceName, "systemd", proc.PID)
-
 	key := fmt.Sprintf("host-java-%s", sanitize(proc.ServiceName))
-	_, unitname := CheckSystemdStatus(proc.ProcessPID)
+	isSystemd, unitname := CheckSystemdStatus(proc.ProcessPID)
+
+	deploymentType := "standalone"
+	if proc.IsInContainer() {
+		deploymentType = "docker"
+	} else if isSystemd {
+		deploymentType = "systemd"
+	}
+
 	return ServiceSetting{
 		PID:               proc.ProcessPID,
-		ServiceName:       proc.ServiceName, // Uses the discovered ServiceName
+		ServiceName:       proc.ServiceName,
 		Owner:             proc.ProcessOwner,
 		Status:            proc.Status,
-		Enabled:           true,                        // Assuming discovery means it's available for instrumentation
-		ServiceType:       detectDeploymentType(&proc), // Need your detectDeploymentType helper from the ListAllCommand!
+		Enabled:           true,
+		ServiceType:       deploymentType,
 		Language:          "java",
 		RuntimeVersion:    proc.ProcessRuntimeVersion,
 		JarFile:           proc.JarFile,
@@ -278,23 +284,10 @@ func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
 		HasAgent:          proc.HasJavaAgent,
 		IsMiddlewareAgent: proc.IsMiddlewareAgent,
 		AgentPath:         proc.JavaAgentPath,
-		Instrumented:      proc.HasJavaAgent, // Can be refined
+		Instrumented:      proc.HasJavaAgent,
 		Key:               key,
 		SystemdUnit:       unitname,
 	}
-}
-
-func detectDeploymentType(proc *JavaProcess) string {
-	if proc.IsInContainer() {
-		return "docker"
-	}
-
-	isSystemd, _ := CheckSystemdStatus(proc.ProcessPID)
-	if isSystemd {
-		return "systemd"
-	}
-
-	return "standalone"
 }
 
 func FilterServices(services map[string]ServiceSetting, predicate func(ServiceSetting) bool) map[string]ServiceSetting {
@@ -357,47 +350,48 @@ func FilterInstrumentable(
 }
 
 func sanitize(s string) string {
-	return strings.ToLower(strings.ReplaceAll(s, " ", "-"))
+	s = strings.ToLower(s)
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	result := strings.Join(strings.FieldsFunc(b.String(), func(r rune) bool { return r == '-' }), "-")
+	return strings.Trim(result, "-")
 }
 
-func CheckSystemdStatus(pid int32) (bool, string) {
+// parseCgroupUnitName reads /proc/<pid>/cgroup and returns the innermost
+// non-user systemd unit name. Single source of truth for all cgroup parsing.
+func parseCgroupUnitName(pid int32) (string, bool) {
 	path := fmt.Sprintf("/proc/%d/cgroup", pid)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false, ""
+		return "", false
 	}
 
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		// Only look at the main systemd hierarchy or unified hierarchy (0::)
+	for _, line := range strings.Split(string(data), "\n") {
 		if !strings.Contains(line, ":name=systemd:") && !strings.HasPrefix(line, "0::") {
 			continue
 		}
-
-		// Extract the path part (everything after the second colon)
 		parts := strings.SplitN(line, ":", 3)
 		if len(parts) < 3 {
 			continue
 		}
-		cgroupPath := parts[2]
-
-		// Split path into segments: /, user.slice, user@1000.service, app.slice, my-app.service
-		segments := strings.Split(cgroupPath, "/")
-
-		// REVERSE SEARCH: Find the *last* segment ending in .service
+		segments := strings.Split(parts[2], "/")
 		for i := len(segments) - 1; i >= 0; i-- {
-			segment := segments[i]
-			if strings.HasSuffix(segment, ".service") {
-				// FILTER: Ignore the generic user session service
-				if strings.HasPrefix(segment, "user@") {
-					continue
-				}
-
-				// Found a real service!
-				unitName := strings.TrimSuffix(segment, ".service")
-				return true, unitName
+			seg := segments[i]
+			if strings.HasSuffix(seg, ".service") && !strings.HasPrefix(seg, "user@") {
+				return strings.TrimSuffix(seg, ".service"), true
 			}
 		}
 	}
-	return false, ""
+	return "", false
+}
+
+func CheckSystemdStatus(pid int32) (bool, string) {
+	name, found := parseCgroupUnitName(pid)
+	return found, name
 }

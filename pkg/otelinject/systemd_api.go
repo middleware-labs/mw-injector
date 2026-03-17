@@ -88,7 +88,9 @@ func ListUnits() ([]string, error) {
 	units := []string{}
 
 	for _, setting := range rawReportValue[runtime.GOOS].AutoInstrumentationSettings {
-		units = append(units, setting.SystemdUnit)
+		if setting.SystemdUnit != "" {
+			units = append(units, setting.SystemdUnit)
+		}
 	}
 
 	return units, nil

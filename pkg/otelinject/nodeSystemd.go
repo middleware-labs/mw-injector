@@ -103,6 +103,8 @@ func (n *NodeSystemdInjector) InstrumentService(service discovery.ServiceSetting
 			err,
 		)
 	}
+	// Node.js instrumentation uses the same LD_PRELOAD drop-in as Java.
+	// libotelinject.so handles both runtimes, so NODE_OPTIONS is not required.
 	if err := dropIn.applySystemdDropIn(); err != nil {
 		return fmt.Errorf("could not apply dropIn for %s and pid %d, %w", unitName, service.PID, err)
 	}

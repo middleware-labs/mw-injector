@@ -1,12 +1,9 @@
 package discovery
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
-
 )
 
 func (d *discoverer) extractServiceName(javaProc *JavaProcess, cmdArgs []string) {
@@ -77,68 +74,18 @@ var ignoredSystemdUnits = map[string]bool{
 	"init":               true,
 }
 
-// isIgnoredSystemdProcess returns true if the process's own systemd unit
-// (the innermost non-user .service in its cgroup path) is on the ignore list.
+// isIgnoredSystemdProcess returns true if the process's systemd unit is on the ignore list.
 func (d *discoverer) isIgnoredSystemdProcess(pid int32) bool {
-	path := fmt.Sprintf("/proc/%d/cgroup", pid)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if !strings.Contains(line, ":name=systemd:") && !strings.HasPrefix(line, "0::") {
-			continue
-		}
-		parts := strings.SplitN(line, ":", 3)
-		if len(parts) < 3 {
-			continue
-		}
-		segments := strings.Split(parts[2], "/")
-		for i := len(segments) - 1; i >= 0; i-- {
-			seg := segments[i]
-			if !strings.HasSuffix(seg, ".service") || strings.HasPrefix(seg, "user@") {
-				continue
-			}
-			// First real service segment from the right is the process's own unit.
-			return ignoredSystemdUnits[strings.TrimSuffix(seg, ".service")]
-		}
-	}
-	return false
+	name, found := parseCgroupUnitName(pid)
+	return found && ignoredSystemdUnits[name]
 }
 
 func (d *discoverer) extractSystemdUnitName(pid int32) string {
-	path := fmt.Sprintf("/proc/%d/cgroup", pid)
-	data, err := os.ReadFile(path)
-	if err != nil {
+	name, found := parseCgroupUnitName(pid)
+	if !found || ignoredSystemdUnits[name] {
 		return ""
 	}
-
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		if !strings.Contains(line, ":name=systemd:") && !strings.HasPrefix(line, "0::") {
-			continue
-		}
-
-		parts := strings.SplitN(line, ":", 3)
-		if len(parts) < 3 {
-			continue
-		}
-		cgroupPath := parts[2]
-		segments := strings.Split(cgroupPath, "/")
-
-		// REVERSE SEARCH
-		for i := len(segments) - 1; i >= 0; i-- {
-			segment := segments[i]
-			if strings.HasSuffix(segment, ".service") {
-				unitName := strings.TrimSuffix(segment, ".service")
-				if strings.HasPrefix(segment, "user@") || ignoredSystemdUnits[unitName] {
-					continue
-				}
-				return unitName
-			}
-		}
-	}
-	return ""
+	return name
 }
 
 func (d *discoverer) isGenericJavaName(name string) bool {
