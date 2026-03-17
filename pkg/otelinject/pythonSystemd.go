@@ -56,7 +56,7 @@ func (p *PythonSystemdInjector) Instrument() error {
 	// cascading restarts for multi-process apps (e.g. Gunicorn w/ 4 workers).
 	processedUnits := make(map[string]bool)
 	for _, proc := range p.PythonProcs {
-		isSystemd, unitName := checkSystemdStatus(proc.ProcessPID)
+		isSystemd, unitName := discovery.CheckSystemdStatus(proc.ProcessPID)
 
 		if !isSystemd {
 			continue
@@ -101,12 +101,16 @@ func (p *PythonSystemdInjector) Instrument() error {
 
 func (p *PythonSystemdInjector) Uninstrument() error {
 	var errs error
+	processedUnits := make(map[string]bool)
 	for _, proc := range p.PythonProcs {
-		isSystemd, unitName := checkSystemdStatus(proc.ProcessPID)
+		isSystemd, unitName := discovery.CheckSystemdStatus(proc.ProcessPID)
 		if !isSystemd {
 			continue
 		}
-
+		if processedUnits[unitName] {
+			continue
+		}
+		processedUnits[unitName] = true
 		if err := removeSystemdDropIn(unitName); err != nil {
 			errs = errors.Join(
 				errs,
@@ -120,4 +124,38 @@ func (p *PythonSystemdInjector) Uninstrument() error {
 		}
 	}
 	return errs
+}
+
+func (p *PythonSystemdInjector) InstrumentService(service discovery.ServiceSetting) error {
+	pythonProcToInstrument := p.getPythonProcToInstrument(service.PID)
+	if pythonProcToInstrument == nil {
+		return fmt.Errorf("could not find python process: %v running on the host", service)
+	}
+	isSystemd, unitName := discovery.CheckSystemdStatus(pythonProcToInstrument.ProcessPID)
+	if !isSystemd {
+		return fmt.Errorf("given python process is not a systemd process: %v", service)
+	}
+	dropIn, err := NewSystemdDropin(unitName)
+	if err != nil {
+		return fmt.Errorf(
+			"could not create a new dropIn for python process %s and pid %d, %w",
+			unitName,
+			service.PID,
+			err,
+		)
+	}
+	if err := dropIn.applySystemdDropInPython(); err != nil {
+		return fmt.Errorf("could not apply dropIn for %s and pid %d, %w", unitName, service.PID, err)
+	}
+
+	return nil
+}
+
+func (p *PythonSystemdInjector) getPythonProcToInstrument(pid int32) *discovery.PythonProcess {
+	for _, proc := range p.PythonProcs {
+		if proc.ProcessPID == pid {
+			return &proc
+		}
+	}
+	return nil
 }

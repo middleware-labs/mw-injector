@@ -1,23 +1,17 @@
 package discovery
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
 	"os"
 	"runtime"
-	"time"
+	"strings"
 )
-
-const apiPathForAgentSetting = "api/v1/agent/public/setting/"
 
 // ServiceSetting represents the detailed status for a single service/process.
 type ServiceSetting struct {
-	PID               int    `json:"pid"`
+	PID               int32  `json:"pid"`
 	ServiceName       string `json:"service_name"`
 	Owner             string `json:"owner"`
 	Status            string `json:"status"`
@@ -30,11 +24,12 @@ type ServiceSetting struct {
 	MainClass         string `json:"main_class,omitempty"`
 	HasAgent          bool   `json:"has_agent"`
 	IsMiddlewareAgent bool   `json:"is_middleware_agent"`
+	AgentType         string `json:"agent_type,omitempty"`
 	AgentPath         string `json:"agent_path,omitempty"`
 	ConfigPath        string `json:"config_path,omitempty"`
 	Instrumented      bool   `json:"instrumented"`
 	Key               string `json:"key"`
-	InstrumentThis    *bool  `json:"instrument_this,omitempty"`
+	InstrumentThis    bool   `json:"instrument_this"` // I want this to default to false.
 	ProcessManager    string `json:"process_manager,omitempty"`
 }
 
@@ -58,26 +53,24 @@ type AgentSettingPayload struct {
 func GetAgentReportValue() (AgentReportValue, error) {
 	// --- 1. Perform Process Discovery ---
 	ctx := context.Background()
+	var discoverErrs error
 
 	// a) Host Processes (Java)
-	// Java has its own optimization from your previous PR
 	processes, err := FindAllJavaProcesses(ctx)
 	if err != nil {
-		fmt.Printf("Error discovering Java processes: %v\n", err)
+		discoverErrs = errors.Join(discoverErrs, fmt.Errorf("java discovery failed: %w", err))
 	}
 
 	// b) Node Processes
-	// Internally calls GetCachedProcessMetadata -> Updates LastSeen timestamp
 	nodeProcs, err := FindAllNodeProcesses(ctx)
 	if err != nil {
-		fmt.Printf("Error discovering Node processes: %v\n", err)
+		discoverErrs = errors.Join(discoverErrs, fmt.Errorf("node discovery failed: %w", err))
 	}
 
 	// c) Python Processes
-	// Internally calls GetCachedProcessMetadata -> Updates LastSeen timestamp
 	pythonProcs, err := FindAllPythonProcess(ctx)
 	if err != nil {
-		fmt.Printf("Error discovering Python processes: %v\n", err)
+		discoverErrs = errors.Join(discoverErrs, fmt.Errorf("python discovery failed: %w", err))
 	}
 
 	// --- 2. SWEEP (Garbage Collection) ---
@@ -118,13 +111,16 @@ func GetAgentReportValue() (AgentReportValue, error) {
 		},
 	}
 
-	return reportValue, nil
+	return reportValue, discoverErrs
 }
 
 // Placeholder for logic that converts discovery.Container to ServiceSetting
 func convertJavaContainerToServiceSetting(container DockerContainer) ServiceSetting {
 	// Generate a unique key for the container service
-	key := container.ContainerID[:12]
+	key := container.ContainerID
+	if len(key) >= 12 {
+		key = key[:12]
+	}
 	// You can access the embedded JavaProcess like this: container.JavaProcess
 
 	return ServiceSetting{
@@ -138,9 +134,11 @@ func convertJavaContainerToServiceSetting(container DockerContainer) ServiceSett
 
 func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 	// 1. Generate a stable Key
-	key := fmt.Sprintf("host-%d", proc.ProcessPID)
+
+	key := fmt.Sprintf("host-node-%s", sanitize(proc.ServiceName))
 	serviceType := "system"
 
+	_, unitname := CheckSystemdStatus(proc.ProcessPID)
 	// 2. Handle Container Infrastructure
 	if proc.IsInContainer() {
 		serviceType = "docker"
@@ -152,7 +150,7 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 	}
 
 	return ServiceSetting{
-		PID:               int(proc.ProcessPID),
+		PID:               proc.ProcessPID,
 		ServiceName:       proc.ServiceName,
 		Owner:             proc.ProcessOwner,
 		Status:            proc.Status,
@@ -165,15 +163,18 @@ func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
 		AgentPath:         proc.NodeAgentPath,
 		Instrumented:      proc.HasNodeAgent,
 		Key:               key,
+		SystemdUnit:       unitname,
 	}
 }
 
 func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
 	// Generate a unique key for the service
-	key := fmt.Sprintf("host-%d", proc.ProcessPID)
 
+	key := fmt.Sprintf("host-python-%s", sanitize(proc.ServiceName))
 	// Determine the service type based on process manager or environment
 	serviceType := "system"
+
+	_, unitname := CheckSystemdStatus(proc.ProcessPID)
 
 	if proc.IsInContainer() {
 		serviceType = "docker"
@@ -182,7 +183,7 @@ func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
 	}
 
 	return ServiceSetting{
-		PID:            int(proc.ProcessPID),
+		PID:            proc.ProcessPID,
 		ServiceName:    proc.ServiceName,
 		Owner:          proc.ProcessOwner,
 		Status:         proc.Status,
@@ -198,12 +199,14 @@ func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
 		// Instrumentation Status
 		HasAgent:          proc.HasPythonAgent,
 		IsMiddlewareAgent: proc.IsMiddlewareAgent,
+		AgentType:         proc.PythonAgentType.String(),
 		AgentPath:         proc.PythonAgentPath,
 		Instrumented:      proc.HasPythonAgent,
 
 		// Metadata and Unique Key
 		Key:            key,
 		ProcessManager: proc.ProcessManager,
+		SystemdUnit:    unitname,
 	}
 }
 
@@ -256,19 +259,24 @@ func convertNodeContainerToServiceSetting(container DockerContainer) ServiceSett
 	}
 }
 
-// Placeholder for logic that converts discovery.JavaProcess to ServiceSetting
 func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
-	// Generate a unique key for the service. The naming package helps here.
-	// e.g., key := naming.GenerateHostServiceKey(proc.ServiceName, "systemd", proc.PID)
-	key := fmt.Sprintf("host-%d", proc.ProcessPID)
+	key := fmt.Sprintf("host-java-%s", sanitize(proc.ServiceName))
+	isSystemd, unitname := CheckSystemdStatus(proc.ProcessPID)
+
+	deploymentType := "standalone"
+	if proc.IsInContainer() {
+		deploymentType = "docker"
+	} else if isSystemd {
+		deploymentType = "systemd"
+	}
 
 	return ServiceSetting{
-		PID:               int(proc.ProcessPID),
-		ServiceName:       proc.ServiceName, // Uses the discovered ServiceName
+		PID:               proc.ProcessPID,
+		ServiceName:       proc.ServiceName,
 		Owner:             proc.ProcessOwner,
 		Status:            proc.Status,
-		Enabled:           true,                        // Assuming discovery means it's available for instrumentation
-		ServiceType:       detectDeploymentType(&proc), // Need your detectDeploymentType helper from the ListAllCommand!
+		Enabled:           true,
+		ServiceType:       deploymentType,
 		Language:          "java",
 		RuntimeVersion:    proc.ProcessRuntimeVersion,
 		JarFile:           proc.JarFile,
@@ -276,81 +284,114 @@ func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
 		HasAgent:          proc.HasJavaAgent,
 		IsMiddlewareAgent: proc.IsMiddlewareAgent,
 		AgentPath:         proc.JavaAgentPath,
-		Instrumented:      proc.HasJavaAgent, // Can be refined
+		Instrumented:      proc.HasJavaAgent,
 		Key:               key,
+		SystemdUnit:       unitname,
 	}
 }
 
-func detectDeploymentType(proc *JavaProcess) string {
-	if proc.ProcessOwner != "root" && proc.ProcessOwner != os.Getenv("USER") {
-		return "systemd"
+func FilterServices(services map[string]ServiceSetting, predicate func(ServiceSetting) bool) map[string]ServiceSetting {
+	result := make(map[string]ServiceSetting)
+	for k, v := range services {
+		if predicate(v) {
+			result[k] = v
+		}
 	}
-	if proc.IsInContainer() {
-		return "docker"
-	}
-	return "standalone"
+	return result
 }
 
-func ReportStatus(
-	hostname string,
-	apiKey string,
-	urlForConfigCheck string,
-	version string,
-	infraPlatform string,
-) error {
-	u, err := url.Parse(urlForConfigCheck)
+func And(predicates ...func(ServiceSetting) bool) func(ServiceSetting) bool {
+	return func(s ServiceSetting) bool {
+		for _, p := range predicates {
+			if !p(s) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+func FilterInstrumentable(
+	storedSettings map[string]ServiceSetting, // Coming from the database
+	currentSettings map[string]ServiceSetting, // Coming from the live system
+) map[string]ServiceSetting {
+	// Build a lookup index from current settings keyed by (service_name, language)
+	// since PIDs change across restarts, making key-based matching unreliable.
+	type serviceIdentity struct {
+		ServiceName string
+		Language    string
+	}
+	currentIndex := make(map[serviceIdentity]ServiceSetting, len(currentSettings))
+	for _, current := range currentSettings {
+		id := serviceIdentity{current.ServiceName, current.Language}
+		currentIndex[id] = current
+	}
+
+	result := make(map[string]ServiceSetting)
+	for _, stored := range storedSettings {
+		if !stored.InstrumentThis {
+			continue
+		}
+
+		id := serviceIdentity{stored.ServiceName, stored.Language}
+		current, exists := currentIndex[id]
+		if !exists {
+			// Was marked for instrumentation but is no longer running
+			continue
+		}
+
+		// Use current (live) entry for fresh PID/status/paths,
+		// but carry over InstrumentThis from the stored setting
+		current.InstrumentThis = true
+		result[current.Key] = current
+	}
+
+	return result
+}
+
+func sanitize(s string) string {
+	s = strings.ToLower(s)
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	result := strings.Join(strings.FieldsFunc(b.String(), func(r rune) bool { return r == '-' }), "-")
+	return strings.Trim(result, "-")
+}
+
+// parseCgroupUnitName reads /proc/<pid>/cgroup and returns the innermost
+// non-user systemd unit name. Single source of truth for all cgroup parsing.
+func parseCgroupUnitName(pid int32) (string, bool) {
+	path := fmt.Sprintf("/proc/%d/cgroup", pid)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
-	}
-	baseURL := u.JoinPath(apiPathForAgentSetting, apiKey, hostname)
-	finalURL := baseURL.String()
-
-	rawReportValue, err := GetAgentReportValue()
-	if err != nil {
-		return fmt.Errorf("failed to generate agent report value: %w", err)
+		return "", false
 	}
 
-	rawConfigBytes, err := json.Marshal(rawReportValue)
-	if err != nil {
-		return fmt.Errorf("failed to marshal raw config payload: %w", err)
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.Contains(line, ":name=systemd:") && !strings.HasPrefix(line, "0::") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		segments := strings.Split(parts[2], "/")
+		for i := len(segments) - 1; i >= 0; i-- {
+			seg := segments[i]
+			if strings.HasSuffix(seg, ".service") && !strings.HasPrefix(seg, "user@") {
+				return strings.TrimSuffix(seg, ".service"), true
+			}
+		}
 	}
+	return "", false
+}
 
-	encodedConfig := base64.StdEncoding.EncodeToString(rawConfigBytes)
-
-	payload := AgentSettingPayload{
-		Value: encodedConfig,
-		MetaData: map[string]interface{}{
-			"agent_version":  version,
-			"platform":       runtime.GOOS,
-			"infra_platform": fmt.Sprint(infraPlatform),
-			// c.collector == nil means the collector is NOT running (i.e., collectorRunning = 1)
-		},
-		// Config field is set to nil as per backend API pattern unless needed
-		Config: nil,
-	}
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal final request payload: %w", err)
-	}
-
-	// 4. Create and Execute the HTTP POST Request
-	req, err := http.NewRequest(http.MethodPost, finalURL, bytes.NewBuffer(payloadBytes))
-	if err != nil {
-		return fmt.Errorf("failed to create POST request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("agent status POST request failed for %s: %w", finalURL, err)
-	}
-	defer resp.Body.Close()
-
-	// 5. Check Status Code
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("agent status POST API returned non-200 status code: %d", resp.StatusCode)
-	}
-
-	return nil
+func CheckSystemdStatus(pid int32) (bool, string) {
+	name, found := parseCgroupUnitName(pid)
+	return found, name
 }
