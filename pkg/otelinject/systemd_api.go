@@ -91,14 +91,20 @@ type ServiceInfo struct {
 	AgentType    string
 }
 
-func ListServices() ([]ServiceInfo, error) {
+// ListSystemdServices returns a ServiceInfo entry for every discovered process
+// that is managed by a systemd unit. It tolerates partial discovery errors
+// (e.g. Java found but Python failed) — valid results are returned alongside
+// any non-nil error.
+func ListSystemdServices() ([]ServiceInfo, error) {
 	rawReportValue, err := discovery.GetAgentReportValue()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list services: %w", err)
+
+	osConfig, ok := rawReportValue[runtime.GOOS]
+	if !ok {
+		return nil, err
 	}
 
 	var services []ServiceInfo
-	for _, setting := range rawReportValue[runtime.GOOS].AutoInstrumentationSettings {
+	for _, setting := range osConfig.AutoInstrumentationSettings {
 		if setting.SystemdUnit == "" {
 			continue
 		}
@@ -114,17 +120,18 @@ func ListServices() ([]ServiceInfo, error) {
 		})
 	}
 
-	return services, nil
+	return services, err
 }
 
+// ListUnits returns the systemd unit names for all discovered systemd services.
+// It delegates to ListSystemdServices; see that function for error semantics.
 func ListUnits() ([]string, error) {
-	services, err := ListServices()
-	if err != nil {
-		return nil, err
-	}
+	// ListSystemdServices builds full ServiceInfo structs to extract unit names.
+	// Acceptable at current scale; revisit if discovery becomes expensive.
+	services, err := ListSystemdServices()
 	units := make([]string, 0, len(services))
 	for _, s := range services {
 		units = append(units, s.SystemdUnit)
 	}
-	return units, nil
+	return units, err
 }
