@@ -6,6 +6,7 @@ name: PR Agent (Gemini)
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  issue_comment:
 
 jobs:
   pr_agent_job:
@@ -34,6 +35,7 @@ jobs:
           GITHUB_ACTION_CONFIG.AUTO_REVIEW: "true"
           GITHUB_ACTION_CONFIG.AUTO_DESCRIBE: "true"
           GITHUB_ACTION_CONFIG.AUTO_IMPROVE: "false"
+          # github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "review_requested"]'
           # === Optional customization ===
           # PR_REVIEWER.EXTRA_INSTRUCTIONS: "Focus on security and performance"
           # PR_REVIEWER.NUM_CODE_SUGGESTIONS: "3"
