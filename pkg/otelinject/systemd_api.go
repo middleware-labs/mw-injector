@@ -79,19 +79,59 @@ func UninstrumentUnit(unitName string) error {
 	return removeSystemdDropIn(unitName)
 }
 
-func ListUnits() ([]string, error) {
+// ServiceInfo holds display-relevant fields for a discovered service.
+type ServiceInfo struct {
+	Name         string
+	Language     string
+	PID          int32
+	Owner        string
+	Status       string
+	Instrumented bool
+	SystemdUnit  string
+	AgentType    string
+}
+
+// ListSystemdServices returns a ServiceInfo entry for every discovered process
+// that is managed by a systemd unit. It tolerates partial discovery errors
+// (e.g. Java found but Python failed) — valid results are returned alongside
+// any non-nil error.
+func ListSystemdServices() ([]ServiceInfo, error) {
 	rawReportValue, err := discovery.GetAgentReportValue()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list units: %w ", err)
+
+	osConfig, ok := rawReportValue[runtime.GOOS]
+	if !ok {
+		return nil, fmt.Errorf("no agent host-setting was found for the %s", runtime.GOOS)
 	}
 
-	units := []string{}
-
-	for _, setting := range rawReportValue[runtime.GOOS].AutoInstrumentationSettings {
-		if setting.SystemdUnit != "" {
-			units = append(units, setting.SystemdUnit)
+	var services []ServiceInfo
+	for _, setting := range osConfig.AutoInstrumentationSettings {
+		if setting.SystemdUnit == "" {
+			continue
 		}
+		services = append(services, ServiceInfo{
+			Name:         setting.ServiceName,
+			Language:     setting.Language,
+			PID:          setting.PID,
+			Owner:        setting.Owner,
+			Status:       setting.Status,
+			Instrumented: setting.Instrumented,
+			SystemdUnit:  setting.SystemdUnit,
+			AgentType:    setting.AgentType,
+		})
 	}
 
-	return units, nil
+	return services, err
+}
+
+// ListUnits returns the systemd unit names for all discovered systemd services.
+// It delegates to ListSystemdServices; see that function for error semantics.
+func ListUnits() ([]string, error) {
+	// ListSystemdServices builds full ServiceInfo structs to extract unit names.
+	// Acceptable at current scale; revisit if discovery becomes expensive.
+	services, err := ListSystemdServices()
+	units := make([]string, 0, len(services))
+	for _, s := range services {
+		units = append(units, s.SystemdUnit)
+	}
+	return units, err
 }
