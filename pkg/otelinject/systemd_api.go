@@ -100,7 +100,7 @@ func ListSystemdServices() ([]ServiceInfo, error) {
 
 	osConfig, ok := rawReportValue[runtime.GOOS]
 	if !ok {
-		return nil, err
+		return nil, fmt.Errorf("no agent host-setting was found for the %s", runtime.GOOS)
 	}
 
 	var services []ServiceInfo
