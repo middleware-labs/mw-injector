@@ -79,19 +79,52 @@ func UninstrumentUnit(unitName string) error {
 	return removeSystemdDropIn(unitName)
 }
 
-func ListUnits() ([]string, error) {
+// ServiceInfo holds display-relevant fields for a discovered service.
+type ServiceInfo struct {
+	Name         string
+	Language     string
+	PID          int32
+	Owner        string
+	Status       string
+	Instrumented bool
+	SystemdUnit  string
+	AgentType    string
+}
+
+func ListServices() ([]ServiceInfo, error) {
 	rawReportValue, err := discovery.GetAgentReportValue()
 	if err != nil {
-		return nil, fmt.Errorf("failed to list units: %w ", err)
+		return nil, fmt.Errorf("failed to list services: %w", err)
 	}
 
-	units := []string{}
-
+	var services []ServiceInfo
 	for _, setting := range rawReportValue[runtime.GOOS].AutoInstrumentationSettings {
-		if setting.SystemdUnit != "" {
-			units = append(units, setting.SystemdUnit)
+		if setting.SystemdUnit == "" {
+			continue
 		}
+		services = append(services, ServiceInfo{
+			Name:         setting.ServiceName,
+			Language:     setting.Language,
+			PID:          setting.PID,
+			Owner:        setting.Owner,
+			Status:       setting.Status,
+			Instrumented: setting.Instrumented,
+			SystemdUnit:  setting.SystemdUnit,
+			AgentType:    setting.AgentType,
+		})
 	}
 
+	return services, nil
+}
+
+func ListUnits() ([]string, error) {
+	services, err := ListServices()
+	if err != nil {
+		return nil, err
+	}
+	units := make([]string, 0, len(services))
+	for _, s := range services {
+		units = append(units, s.SystemdUnit)
+	}
 	return units, nil
 }
