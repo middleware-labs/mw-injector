@@ -300,6 +300,36 @@ func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
 	}
 }
 
+// ApplyStoredInstrumentThis merges instrument_this flags from storedSettings into
+// currentSettings. All current services are returned; instrument_this is set to true
+// only when a stored entry with a matching (service_name, language) has InstrumentThis=true.
+// This preserves user-configured flags across agent report cycles without filtering out
+// services that the user has not yet chosen to instrument.
+func ApplyStoredInstrumentThis(
+	storedSettings map[string]ServiceSetting,
+	currentSettings map[string]ServiceSetting,
+) map[string]ServiceSetting {
+	type serviceIdentity struct {
+		ServiceName string
+		Language    string
+	}
+	storedIndex := make(map[serviceIdentity]bool, len(storedSettings))
+	for _, s := range storedSettings {
+		if s.InstrumentThis {
+			storedIndex[serviceIdentity{s.ServiceName, s.Language}] = true
+		}
+	}
+
+	result := make(map[string]ServiceSetting, len(currentSettings))
+	for k, current := range currentSettings {
+		if storedIndex[serviceIdentity{current.ServiceName, current.Language}] {
+			current.InstrumentThis = true
+		}
+		result[k] = current
+	}
+	return result
+}
+
 func FilterServices(services map[string]ServiceSetting, predicate func(ServiceSetting) bool) map[string]ServiceSetting {
 	result := make(map[string]ServiceSetting)
 	for k, v := range services {
