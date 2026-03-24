@@ -2,6 +2,7 @@ package otelinject
 
 import (
 	"fmt"
+	"log"
 	"net/url"
 	"runtime"
 
@@ -40,6 +41,28 @@ func ReportStatus(
 	rawReportValue, err := discovery.GetAgentReportValue()
 	if err != nil {
 		return fmt.Errorf("failed to generate agent report value: %w", err)
+	}
+
+	// Fetch stored settings from the backend and carry over any instrument_this=true
+	// flags the user set via the UI. Without this, every report cycle would reset all
+	// instrument_this fields to false (the discovery default), silently undoing user choices.
+	storedRaw, fetchErr := client.GetAgentHostSettings()
+	if fetchErr != nil {
+		log.Printf("warning: failed to fetch stored agent settings, instrument_this flags will not be preserved: %v", fetchErr)
+	} else {
+		storedSettings, parseErr := discovery.GetAutoInstrumentationSettings(storedRaw)
+		if parseErr != nil {
+			log.Printf("warning: failed to parse stored auto_instrumentation_settings, instrument_this flags will not be preserved: %v", parseErr)
+		} else {
+			osKey := runtime.GOOS
+			if osConfig, ok := rawReportValue[osKey]; ok {
+				osConfig.AutoInstrumentationSettings = discovery.ApplyStoredInstrumentThis(
+					storedSettings,
+					osConfig.AutoInstrumentationSettings,
+				)
+				rawReportValue[osKey] = osConfig
+			}
+		}
 	}
 
 	if err := client.ReportStatus(rawReportValue); err != nil {
