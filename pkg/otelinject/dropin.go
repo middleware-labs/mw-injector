@@ -84,9 +84,9 @@ Environment="PYTHON_AUTO_INSTRUMENTATION_AGENT_PATH_PREFIX=%s"
 Environment="OTEL_SERVICE_NAME=%s"
 Environment="OTEL_EXPORTER_OTLP_ENDPOINT=%s"
 Environment="OTEL_EXPORTER_OTLP_HEADERS=%s"
-Environment="OTEL_TRACES_EXPORTER=otlp"
-Environment="OTEL_METRICS_EXPORTER=otlp"
-Environment="OTEL_LOGS_EXPORTER=otlp"
+Environment="OTEL_TRACES_EXPORTER=otlp_proto_http"
+Environment="OTEL_METRICS_EXPORTER=otlp_proto_http"
+Environment="OTEL_LOGS_EXPORTER=otlp_proto_http"
 
 # Debug logging
 Environment="OTEL_INJECTOR_LOG_LEVEL=info"
