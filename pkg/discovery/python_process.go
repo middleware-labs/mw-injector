@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -114,20 +113,3 @@ func (pp *PythonProcess) FormatAgentStatus() string {
 	return status
 }
 
-// Helper methods used during discovery (to be called from process.go)
-
-// detectPythonProcessManager identifies Gunicorn, Uvicorn, or Celery
-func (d *discoverer) detectPythonProcessManager(pyProc *PythonProcess, cmdArgs []string) {
-	cmdlineLower := strings.ToLower(strings.Join(cmdArgs, " "))
-
-	if strings.Contains(cmdlineLower, "gunicorn") {
-		pyProc.IsGunicornProcess = true
-		pyProc.ProcessManager = "gunicorn"
-	} else if strings.Contains(cmdlineLower, "uvicorn") {
-		pyProc.IsUvicornProcess = true
-		pyProc.ProcessManager = "uvicorn"
-	} else if strings.Contains(cmdlineLower, "celery") {
-		pyProc.IsCeleryProcess = true
-		pyProc.ProcessManager = "celery"
-	}
-}
