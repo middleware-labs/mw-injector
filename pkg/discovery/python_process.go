@@ -94,17 +94,17 @@ func (pp *PythonProcess) HasInstrumentation() bool {
 
 // FormatAgentStatus returns a human-readable agent status string
 func (pp *PythonProcess) FormatAgentStatus() string {
-	status := "❌ None"
+	status := "[x] None"
 	if pp.HasPythonAgent {
 		if pp.IsMiddlewareAgent {
-			status = "✅ MW"
+			status = "[ok] MW"
 		} else {
-			status = "✅ OTel"
+			status = "[ok] OTel"
 		}
 	}
 
 	if pp.IsInContainer() {
-		status += fmt.Sprintf(" (📦 %s)", pp.ContainerInfo.Runtime)
+		status += fmt.Sprintf(" (container: %s)", pp.ContainerInfo.Runtime)
 	}
 
 	if pp.IsGunicornProcess {

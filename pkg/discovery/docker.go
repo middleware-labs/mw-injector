@@ -675,14 +675,14 @@ func (dd *DockerDiscoverer) GetContainerByID(id string) (*DockerContainer, error
 // FormatAgentStatus returns human-readable agent status
 func (dc *DockerContainer) FormatAgentStatus() string {
 	if !dc.HasJavaAgent {
-		return "❌ None"
+		return "[x] None"
 	}
 
 	if dc.IsMiddlewareAgent {
-		return "✅ MW"
+		return "[ok] MW"
 	}
 
-	return "✅ Other"
+	return "[ok] Other"
 }
 
 // GetServiceName returns the service name for the container

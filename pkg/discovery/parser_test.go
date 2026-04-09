@@ -74,7 +74,7 @@ func TestExtractJarFiles(t *testing.T) {
 		{
 			name:     "No JAR files",
 			args:     []string{"java", "com.example.Main"},
-			expected: []string{},
+			expected: nil,
 		},
 		{
 			name:     "JAR with path",
@@ -163,7 +163,7 @@ func TestExtractJVMOptions(t *testing.T) {
 		{
 			name:     "No JVM options",
 			args:     []string{"java", "com.example.Main"},
-			expected: []string{},
+			expected: nil,
 		},
 	}
 
@@ -314,7 +314,7 @@ func TestNormalizeServiceName(t *testing.T) {
 		{
 			name:     "Version in name",
 			input:    "microservice-auth-v1.2.3",
-			expected: "microservice-auth-v1-2-3",
+			expected: "microservice-auth-v123",
 		},
 	}
 

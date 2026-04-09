@@ -82,7 +82,7 @@ func TestJavaProcessFormatAgentStatus(t *testing.T) {
 				IsMiddlewareAgent: true,
 				JavaAgentPath:     "/opt/middleware-javaagent-1.7.0.jar",
 			},
-			expectedStatus: "✅ MW",
+			expectedStatus: "[ok] MW",
 		},
 		{
 			name: "OpenTelemetry agent",
@@ -91,7 +91,7 @@ func TestJavaProcessFormatAgentStatus(t *testing.T) {
 				IsMiddlewareAgent: false,
 				JavaAgentPath:     "/opt/opentelemetry-javaagent.jar",
 			},
-			expectedStatus: "✅ OTel",
+			expectedStatus: "[ok] OTel",
 		},
 	}
 
