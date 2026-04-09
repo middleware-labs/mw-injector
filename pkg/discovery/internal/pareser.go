@@ -215,9 +215,10 @@ func NormalizeServiceName(name string) string {
 	// Convert to lowercase
 	name = strings.ToLower(name)
 
-	// Replace underscores and spaces with hyphens
+	// Replace common separators with hyphens
 	name = strings.ReplaceAll(name, "_", "-")
 	name = strings.ReplaceAll(name, " ", "-")
+	name = strings.ReplaceAll(name, ".", "-")
 
 	// Remove invalid characters (keep only alphanumeric and hyphens)
 	reg := regexp.MustCompile(`[^a-z0-9\-]+`)

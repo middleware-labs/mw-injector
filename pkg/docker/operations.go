@@ -218,13 +218,13 @@ func (do *DockerOperations) instrumentStandaloneContainer(container *discovery.D
 	if err := do.copyAgentToContainer(container.ContainerID); err != nil {
 		return fmt.Errorf("failed to copy agent: %w", err)
 	}
-	fmt.Println("   ✅ Agent copied to container")
+	fmt.Println("   [ok] Agent copied to container")
 
 	// Step 3: Build new environment variables with instrumentation
 	newEnv := do.buildInstrumentationEnv(container, cfg)
 
 	// Step 4: Stop the container
-	fmt.Println("   🛑 Stopping container...")
+	fmt.Println("   [..] Stopping container...")
 	if err := do.stopContainer(container.ContainerID); err != nil {
 		return fmt.Errorf("failed to stop container: %w", err)
 	}
@@ -232,7 +232,7 @@ func (do *DockerOperations) instrumentStandaloneContainer(container *discovery.D
 	// Step 5: Commit container to preserve any changes
 	newImageName := fmt.Sprintf("%s-mw-instrumented:latest", container.ContainerName)
 	if err := do.commitContainer(container.ContainerID, newImageName); err != nil {
-		fmt.Printf("   ⚠️  Warning: Could not commit container: %v\n", err)
+		fmt.Printf("   [warn]  Warning: Could not commit container: %v\n", err)
 		// Use original image name if commit fails
 		newImageName = container.ImageName + ":" + container.ImageTag
 	}
@@ -250,10 +250,10 @@ func (do *DockerOperations) instrumentStandaloneContainer(container *discovery.D
 
 	// Step 8: Save state with ORIGINAL recreation command for proper restoration
 	if err := do.saveContainerStateWithCommand(container, cfg, originalRecreationCommand, string(originalConfigBytes)); err != nil {
-		fmt.Printf("   ⚠️  Warning: Could not save state: %v\n", err)
+		fmt.Printf("   [warn]  Warning: Could not save state: %v\n", err)
 	}
 
-	fmt.Printf("   ✅ Container %s instrumented successfully\n", container.ContainerName)
+	fmt.Printf("   [ok] Container %s instrumented successfully\n", container.ContainerName)
 	return nil
 }
 
@@ -379,10 +379,10 @@ func (do *DockerOperations) instrumentComposeContainer(container *discovery.Dock
 	// Step 2: Create backup
 	backupPath, err := modifier.BackupComposeFile()
 	if err != nil {
-		fmt.Printf("   ⚠️  Warning: Could not backup compose file: %v\n", err)
+		fmt.Printf("   [warn]  Warning: Could not backup compose file: %v\n", err)
 		backupPath = "" // Continue without backup
 	} else {
-		fmt.Printf("   ✅ Backup created: %s\n", filepath.Base(backupPath))
+		fmt.Printf("   [ok] Backup created: %s\n", filepath.Base(backupPath))
 	}
 
 	// Step 3: Modify compose file
@@ -404,7 +404,7 @@ func (do *DockerOperations) instrumentComposeContainer(container *discovery.Dock
 	}
 
 	// Step 5: Recreate service using docker-compose
-	fmt.Println("   🔄 Recreating service...")
+	fmt.Println("   [..] Recreating service...")
 	if err := do.recreateComposeService(container); err != nil {
 		// Restore backup on failure
 		if backupPath != "" {
@@ -416,18 +416,18 @@ func (do *DockerOperations) instrumentComposeContainer(container *discovery.Dock
 
 	// Step 6: Verify instrumentation worked
 	if err := do.verifyContainerInstrumentation(container.ContainerName); err != nil {
-		fmt.Printf("   ⚠️  Warning: Instrumentation verification failed: %v\n", err)
+		fmt.Printf("   [warn]  Warning: Instrumentation verification failed: %v\n", err)
 		fmt.Println("   🔍 Check container logs for issues")
 	} else {
-		fmt.Println("   ✅ Instrumentation verified")
+		fmt.Println("   [ok] Instrumentation verified")
 	}
 
 	// Step 7: Save state
 	if err := do.saveContainerState(container, cfg); err != nil {
-		fmt.Printf("   ⚠️  Warning: Could not save state: %v\n", err)
+		fmt.Printf("   [warn]  Warning: Could not save state: %v\n", err)
 	}
 
-	fmt.Printf("   ✅ Container %s instrumented successfully\n", container.ContainerName)
+	fmt.Printf("   [ok] Container %s instrumented successfully\n", container.ContainerName)
 	return nil
 }
 
@@ -449,10 +449,10 @@ func (do *DockerOperations) instrumentComposeNodeContainer(
 	// Step 2: Create backup
 	backupPath, err := modifier.BackupComposeFile()
 	if err != nil {
-		fmt.Printf("   ⚠️  Warning: Could not backup compose file: %v\n", err)
+		fmt.Printf("   [warn]  Warning: Could not backup compose file: %v\n", err)
 		backupPath = "" // Continue without backup
 	} else {
-		fmt.Printf("   ✅ Backup created: %s\n", filepath.Base(backupPath))
+		fmt.Printf("   [ok] Backup created: %s\n", filepath.Base(backupPath))
 	}
 
 	// Step 3: Modify compose file
@@ -474,7 +474,7 @@ func (do *DockerOperations) instrumentComposeNodeContainer(
 	}
 
 	// Step 5: Recreate service using docker-compose
-	fmt.Println("   🔄 Recreating service...")
+	fmt.Println("   [..] Recreating service...")
 	if err := do.recreateComposeService(container); err != nil {
 		// Restore backup on failure
 		if backupPath != "" {
@@ -486,18 +486,18 @@ func (do *DockerOperations) instrumentComposeNodeContainer(
 
 	// Step 6: Verify instrumentation worked
 	if err := do.verifyContainerInstrumentation(container.ContainerName); err != nil {
-		fmt.Printf("   ⚠️  Warning: Instrumentation verification failed: %v\n", err)
+		fmt.Printf("   [warn]  Warning: Instrumentation verification failed: %v\n", err)
 		fmt.Println("   🔍 Check container logs for issues")
 	} else {
-		fmt.Println("   ✅ Instrumentation verified")
+		fmt.Println("   [ok] Instrumentation verified")
 	}
 
 	// Step 7: Save state
 	if err := do.saveContainerState(container, cfg); err != nil {
-		fmt.Printf("   ⚠️  Warning: Could not save state: %v\n", err)
+		fmt.Printf("   [warn]  Warning: Could not save state: %v\n", err)
 	}
 
-	fmt.Printf("   ✅ Container %s instrumented successfully\n", container.ContainerName)
+	fmt.Printf("   [ok] Container %s instrumented successfully\n", container.ContainerName)
 	return nil
 
 }
@@ -671,21 +671,21 @@ func (do *DockerOperations) UninstrumentContainer(containerName string) error {
 func (do *DockerOperations) uninstrumentStandaloneContainer(state *ContainerState) error {
 	// Check if we have the original recreation command
 	if state.RecreationCommand == "" {
-		fmt.Println("   ⚠️  Cannot fully restore container without original configuration")
+		fmt.Println("   [warn]  Cannot fully restore container without original configuration")
 		fmt.Println("   💡 Suggestion: Remove JAVA_TOOL_OPTIONS and MW_* env vars manually and restart")
 		return do.removeContainerState(state.ContainerName)
 	}
 
-	fmt.Println("   🔄 Restoring original container configuration...")
+	fmt.Println("   [..] Restoring original container configuration...")
 
 	// Stop current container
 	if err := do.stopContainerByName(state.ContainerName); err != nil {
-		fmt.Printf("   ⚠️  Warning: Could not stop container: %v\n", err)
+		fmt.Printf("   [warn]  Warning: Could not stop container: %v\n", err)
 	}
 
 	// Remove current container
 	if err := do.removeContainerByName(state.ContainerName); err != nil {
-		fmt.Printf("   ⚠️  Warning: Could not remove container: %v\n", err)
+		fmt.Printf("   [warn]  Warning: Could not remove container: %v\n", err)
 	}
 
 	// Recreate with original command
@@ -694,7 +694,7 @@ func (do *DockerOperations) uninstrumentStandaloneContainer(state *ContainerStat
 		return fmt.Errorf("failed to recreate container with original config: %w", err)
 	}
 
-	fmt.Printf("   ✅ Container %s restored to original configuration\n", state.ContainerName)
+	fmt.Printf("   [ok] Container %s restored to original configuration\n", state.ContainerName)
 
 	// Remove from state
 	return do.removeContainerState(state.ContainerName)
@@ -708,10 +708,10 @@ func (do *DockerOperations) uninstrumentComposeContainer(state *ContainerState) 
 		if err := do.copyFile(backupFile, state.ComposeFile); err != nil {
 			return fmt.Errorf("failed to restore compose file: %w", err)
 		}
-		fmt.Println("   ✅ Compose file restored")
+		fmt.Println("   [ok] Compose file restored")
 
 		// Recreate service
-		fmt.Println("   🔄 Recreating service...")
+		fmt.Println("   [..] Recreating service...")
 
 		// Get container to recreate
 		container, err := do.discoverer.GetContainerByName(state.ContainerName)
@@ -719,7 +719,7 @@ func (do *DockerOperations) uninstrumentComposeContainer(state *ContainerState) 
 			do.recreateComposeService(container)
 		}
 	} else {
-		fmt.Println("   ⚠️  Backup compose file not found")
+		fmt.Println("   [warn]  Backup compose file not found")
 		fmt.Println("   💡 Suggestion: Manually remove MW instrumentation from compose file and run 'docker-compose up -d'")
 	}
 
@@ -733,7 +733,7 @@ func (do *DockerOperations) copyAgentToContainer(containerID string) error {
 	mkdirCmd := exec.CommandContext(do.ctx, "docker", "exec", containerID, "mkdir", "-p", "/opt/middleware/agents")
 	if err := mkdirCmd.Run(); err != nil {
 		// Try without mkdir if it fails (some distroless images don't have mkdir)
-		fmt.Println("   ⚠️  Could not create directory, trying direct copy...")
+		fmt.Println("   [warn]  Could not create directory, trying direct copy...")
 	}
 
 	// Copy agent file
@@ -901,7 +901,7 @@ func (do *DockerOperations) modifyComposeFile(container *discovery.DockerContain
 
 	// Check if already instrumented
 	if modifier.isServiceInstrumented(&service) {
-		fmt.Printf("   ⚠️  Service '%s' appears to already be instrumented\n", container.ComposeService)
+		fmt.Printf("   [warn]  Service '%s' appears to already be instrumented\n", container.ComposeService)
 		fmt.Print("   Continue with instrumentation? [y/N]: ")
 
 		var response string
@@ -928,7 +928,7 @@ func (do *DockerOperations) modifyComposeFile(container *discovery.DockerContain
 		return fmt.Errorf("failed to write modified compose file: %w", err)
 	}
 
-	fmt.Printf("   ✅ Modified %s\n", filepath.Base(container.ComposeFile))
+	fmt.Printf("   [ok] Modified %s\n", filepath.Base(container.ComposeFile))
 	return nil
 }
 

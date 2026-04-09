@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MW Injector is a zero-configuration Java application instrumentation tool for the Middleware.io observability platform. It automatically discovers, instruments, and manages Java applications across host processes, Docker containers, Tomcat deployments, and systemd services.
+MW Injector is a Go library for process discovery and auto-instrumentation on Linux hosts, used by the Middleware.io observability platform. It discovers Java/Node/Python applications across host processes, Docker containers, Tomcat deployments, and systemd services, and instruments them with OpenTelemetry agents.
+
+Imported by **mw-agent** via `pkg/otelinject` — not used as a standalone CLI.
 
 **Module:** `github.com/middleware-labs/java-injector`
 **Go Version:** 1.24.2
@@ -12,8 +14,8 @@ MW Injector is a zero-configuration Java application instrumentation tool for th
 ## Build and Test Commands
 
 ```bash
-# Build
-go build -o mw-injector ./cmd/mw-injector
+# Build all packages
+go build ./...
 
 # Run all tests
 go test ./...
@@ -29,9 +31,8 @@ go test -v ./pkg/discovery -run TestParseCommandLine
 
 ### Package Structure
 
-- **cmd/mw-injector/** - Entry point, CLI bootstrap
-- **pkg/cli/** - Command routing via `CommandHandler` interface; commands implemented in `pkg/cli/commands/`
 - **pkg/discovery/** - Process discovery engine with concurrent worker pool; finds Java/Node/Python processes
+- **pkg/otelinject/** - OTel injection interface; the primary integration point for mw-agent
 - **pkg/agent/** - Java agent installation, validation, and permission management
 - **pkg/systemd/** - Creates drop-in files for systemd services; handles Tomcat CATALINA_OPTS
 - **pkg/docker/** - Container instrumentation and state tracking
@@ -67,16 +68,7 @@ go test -v ./pkg/discovery -run TestParseCommandLine
 | Config Files | `/etc/middleware/services/` |
 | Docker State | `/etc/middleware/docker/instrumented.json` |
 
-## CLI Commands
-
-Most commands require root. Main commands:
-- `list-all`, `list-systemd`, `list-docker` - Discovery
-- `auto-instrument`, `instrument-docker`, `instrument-container` - Interactive instrumentation
-- `auto-instrument-config`, `instrument-docker-config` - Config-based (no prompts)
-- `uninstrument`, `uninstrument-docker`, `uninstrument-container` - Cleanup
-
 ## Adding New Features
 
-- **New CLI command:** Implement `CommandHandler` interface in `pkg/cli/commands/`
 - **New process type:** Create `{type}_process.go` in `pkg/discovery/`
 - **New config field:** Extend `ProcessConfiguration` in `pkg/config/config.go`

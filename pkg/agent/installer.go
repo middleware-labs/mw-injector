@@ -42,7 +42,7 @@ func EnsureInstalled(sourcePath string, targetPath string) (string, error) {
 		return "", fmt.Errorf("failed to set agent ownership: %w", err)
 	}
 
-	fmt.Printf("✅ Agent installed to %s with proper permissions\n", targetPath)
+	fmt.Printf("[ok] Agent installed to %s with proper permissions\n", targetPath)
 	return targetPath, nil
 }
 
@@ -57,14 +57,14 @@ func ValidatePermissions(agentPath string) error {
 	// Check if world-readable
 	mode := info.Mode()
 	if mode&0o004 == 0 {
-		fmt.Printf("⚠️  Warning: Agent is not world-readable\n")
+		fmt.Printf("[warn]  Warning: Agent is not world-readable\n")
 		fmt.Printf("   Current permissions: %s\n", mode)
 		fmt.Printf("   Fixing permissions...\n")
 
 		if err := os.Chmod(agentPath, 0o644); err != nil {
 			return fmt.Errorf("failed to fix permissions: %w", err)
 		}
-		fmt.Printf("✅ Permissions fixed to 0644\n")
+		fmt.Printf("[ok] Permissions fixed to 0644\n")
 	}
 
 	return nil

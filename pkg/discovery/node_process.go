@@ -156,28 +156,28 @@ func (np *NodeProcess) FormatAgentStatus() string {
 	var status string
 
 	if !np.HasNodeAgent {
-		status = "❌ None"
+		status = "[x] None"
 	} else {
 		agentInfo := np.GetAgentInfo()
 		switch agentInfo.Type {
 		case NodeAgentMiddleware:
 			if agentInfo.IsServerless {
-				status = "✅ MW (Serverless)"
+				status = "[ok] MW (Serverless)"
 			} else {
-				status = "✅ MW"
+				status = "[ok] MW"
 			}
 		case NodeAgentOpenTelemetry:
-			status = "✅ OTel"
+			status = "[ok] OTel"
 		case NodeAgentOther:
-			status = "✅ Other"
+			status = "[ok] Other"
 		default:
-			status = "⚠️ Unknown"
+			status = "[?] Unknown"
 		}
 	}
 
 	// Add container indicator
 	if np.IsInContainer() {
-		status += fmt.Sprintf(" (📦 %s)", np.GetContainerRuntime())
+		status += fmt.Sprintf(" (container: %s)", np.GetContainerRuntime())
 	}
 
 	// Add process manager indicator

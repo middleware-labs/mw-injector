@@ -52,27 +52,27 @@ func (jp *JavaProcess) FormatAgentStatus() string {
 	var status string
 
 	if !jp.HasJavaAgent {
-		status = "❌ None"
+		status = "[x] None"
 	} else {
 		agentInfo := jp.GetAgentInfo()
 		switch agentInfo.Type {
 		case AgentMiddleware:
 			if agentInfo.IsServerless {
-				status = "✅ MW (Serverless)"
+				status = "[ok] MW (Serverless)"
 			} else {
-				status = "✅ MW"
+				status = "[ok] MW"
 			}
 		case AgentOpenTelemetry:
-			status = "✅ OTel"
+			status = "[ok] OTel"
 		case AgentOther:
-			status = "✅ Other"
+			status = "[ok] Other"
 		default:
-			status = "⚠️ Unknown"
+			status = "[?] Unknown"
 		}
 	}
 
 	if jp.IsInContainer() {
-		status += fmt.Sprintf(" (📦 %s)", jp.GetContainerRuntime())
+		status += fmt.Sprintf(" (container: %s)", jp.GetContainerRuntime())
 	}
 
 	return status

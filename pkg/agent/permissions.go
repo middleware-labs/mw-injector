@@ -64,12 +64,12 @@ func ValidateAccessForUsers(agentPath string, processes []discovery.JavaProcess)
 
 	// If all users can access, we're done
 	if len(inaccessibleUsers) == 0 {
-		fmt.Printf("✅ Agent is accessible by all service users\n")
+		fmt.Printf("[ok] Agent is accessible by all service users\n")
 		return agentPath, nil
 	}
 
 	// Show warning
-	fmt.Printf("\n⚠️  Warning: The following users cannot access %s:\n", agentPath)
+	fmt.Printf("\n[warn]  Warning: The following users cannot access %s:\n", agentPath)
 	for _, user := range inaccessibleUsers {
 		fmt.Printf("   - %s\n", user)
 	}
@@ -101,7 +101,7 @@ func ValidateAccessForUsers(agentPath string, processes []discovery.JavaProcess)
 		return "", fmt.Errorf("failed to write agent file: %v", err)
 	}
 
-	fmt.Printf("   ✅ Copied agent to: %s\n", newPath)
+	fmt.Printf("   [ok] Copied agent to: %s\n", newPath)
 	fmt.Printf("   Permissions: -rw-r--r-- (readable by all users)\n")
 
 	return newPath, nil
@@ -116,7 +116,7 @@ func EnsureAccessibleForSingle(agentPath string, proc *discovery.JavaProcess) (s
 	}
 
 	// If not accessible, offer to copy to shared location
-	fmt.Printf("\n⚠️  Warning: User '%s' cannot access %s\n", proc.ProcessOwner, agentPath)
+	fmt.Printf("\n[warn]  Warning: User '%s' cannot access %s\n", proc.ProcessOwner, agentPath)
 	fmt.Print("   Copy agent to /opt/middleware/agents/? [Y/n]: ")
 
 	reader := bufio.NewReader(os.Stdin)
@@ -153,7 +153,7 @@ func EnsureAccessibleForSingle(agentPath string, proc *discovery.JavaProcess) (s
 		return "", fmt.Errorf("failed to set permissions: %v", err)
 	}
 
-	fmt.Printf("   ✅ Copied agent to: %s\n", newPath)
+	fmt.Printf("   [ok] Copied agent to: %s\n", newPath)
 
 	// Verify the new path is accessible
 	if err := CheckAccessibleByUser(newPath, proc.ProcessOwner); err != nil {
