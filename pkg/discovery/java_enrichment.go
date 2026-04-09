@@ -533,9 +533,9 @@ func readProcessCreateTime(pid int32) int64 {
 	var startTime int64
 	fmt.Sscanf(fields[19], "%d", &startTime)
 
-	// Convert jiffies to milliseconds (assuming 100 Hz clock tick).
+	// Convert jiffies to milliseconds using the actual system clock tick.
 	// This isn't a wallclock time; it's used only as a stable fingerprint.
-	return startTime * 10
+	return startTime * (1000 / clockTickHz)
 }
 
 func readProcessStatus(pid int32) string {
