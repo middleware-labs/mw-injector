@@ -314,7 +314,7 @@ func TestNormalizeServiceName(t *testing.T) {
 		{
 			name:     "Version in name",
 			input:    "microservice-auth-v1.2.3",
-			expected: "microservice-auth-v123",
+			expected: "microservice-auth-v1-2-3",
 		},
 	}
 
