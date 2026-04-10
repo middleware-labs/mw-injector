@@ -44,11 +44,6 @@ type OSConfig struct {
 // AgentReportValue is the root structure for the 'value' field's JSON content.
 type AgentReportValue map[string]OSConfig
 
-type AgentSettingPayload struct {
-	Value    string                            `json:"value"` // Base64 encoded config
-	MetaData map[string]interface{}            `json:"meta_data"`
-	Config   map[string]map[string]interface{} `json:"config"` // This field is technically redundant based on the API handler's logic but included for completeness if needed.
-}
 
 func GetAgentReportValue() (AgentReportValue, error) {
 	// --- 1. Perform Process Discovery ---
