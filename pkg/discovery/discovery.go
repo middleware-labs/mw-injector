@@ -76,21 +76,10 @@ func (jp *JavaProcess) GetContainerName() string {
 	return ""
 }
 
-// Discoverer defines the main interface for Java process discovery
-type Discoverer interface {
-	DiscoverJavaProcesses(ctx context.Context) ([]JavaProcess, error)
-	DiscoverWithOptions(ctx context.Context, opts DiscoveryOptions) ([]JavaProcess, error)
-	RefreshProcess(ctx context.Context, pid int32) (*JavaProcess, error)
-	Close() error
-}
-
 // DiscoveryOptions configures the discovery behavior
 type DiscoveryOptions struct {
 	MaxConcurrency       int           `json:"max_concurrency"`
 	Timeout              time.Duration `json:"timeout"`
-	SkipPermissionErrors bool          `json:"skip_permission_errors"`
-	IncludeEnvironment   bool          `json:"include_environment"`
-	IncludeMetrics       bool          `json:"include_metrics"`
 	Filter               ProcessFilter `json:"filter"`
 	ExcludeContainers    bool          `json:"exclude_containers"`
 	IncludeContainerInfo bool          `json:"include_container_info"`
@@ -98,13 +87,11 @@ type DiscoveryOptions struct {
 
 // ProcessFilter defines filtering criteria for process discovery
 type ProcessFilter struct {
-	IncludeUsers       []string `json:"include_users,omitempty"`
-	ExcludeUsers       []string `json:"exclude_users,omitempty"`
-	CurrentUserOnly    bool     `json:"current_user_only"`
-	HasJavaAgentOnly   bool     `json:"has_java_agent_only"`
-	HasMWAgentOnly     bool     `json:"has_mw_agent_only"`
-	ServiceNamePattern string   `json:"service_name_pattern,omitempty"`
-	MinMemoryMB        float32  `json:"min_memory_mb,omitempty"`
+	IncludeUsers     []string `json:"include_users,omitempty"`
+	ExcludeUsers     []string `json:"exclude_users,omitempty"`
+	CurrentUserOnly  bool     `json:"current_user_only"`
+	HasJavaAgentOnly bool     `json:"has_java_agent_only"`
+	HasMWAgentOnly   bool     `json:"has_mw_agent_only"`
 }
 
 // AgentType represents the type of Java agent detected
@@ -144,12 +131,9 @@ func (a AgentType) String() string {
 // DefaultDiscoveryOptions returns sensible defaults for process discovery
 func DefaultDiscoveryOptions() DiscoveryOptions {
 	return DiscoveryOptions{
-		MaxConcurrency:       10,
-		Timeout:              30 * time.Second,
-		SkipPermissionErrors: true,
-		IncludeEnvironment:   false,
-		IncludeMetrics:       true,
-		Filter:               ProcessFilter{},
+		MaxConcurrency: 10,
+		Timeout:        30 * time.Second,
+		Filter:         ProcessFilter{},
 	}
 }
 
@@ -164,8 +148,6 @@ type discoverer struct {
 }
 
 // NewDiscoverer creates a new process discoverer with default options.
-// Preserves the original signature (returns *discoverer, not Discoverer
-// interface) so existing callers like the tests keep working.
 func NewDiscoverer(ctx context.Context, opts DiscoveryOptions) (*discoverer, error) {
 	return NewDiscovererWithOptions(ctx, DefaultDiscoveryOptions())
 }
@@ -517,69 +499,6 @@ func FindAllPythonProcess(ctx context.Context) ([]PythonProcess, error) {
 	return d.DiscoverPythonWithOptions(ctx, opts)
 }
 
-func FindCurrentUserJavaProcesses(ctx context.Context) ([]JavaProcess, error) {
-	opts := DefaultDiscoveryOptions()
-	opts.Filter.CurrentUserOnly = true
-
-	d, err := NewDiscovererWithOptions(ctx, opts)
-	if err != nil {
-		return nil, fmt.Errorf("error fetching current user's java processes: %w", err)
-	}
-	defer d.Close()
-
-	return d.DiscoverWithOptions(ctx, opts)
-}
-
-func FindInstrumentedProcesses(ctx context.Context) ([]JavaProcess, error) {
-	opts := DefaultDiscoveryOptions()
-	opts.Filter.HasJavaAgentOnly = true
-
-	d, err := NewDiscovererWithOptions(ctx, opts)
-	if err != nil {
-		return nil, fmt.Errorf("error finding instrumented processes: %w", err)
-	}
-	defer d.Close()
-
-	return d.DiscoverWithOptions(ctx, opts)
-}
-
-func FindMiddlewareProcesses(ctx context.Context) ([]JavaProcess, error) {
-	opts := DefaultDiscoveryOptions()
-	opts.Filter.HasMWAgentOnly = true
-
-	d, err := NewDiscovererWithOptions(ctx, opts)
-	if err != nil {
-		return nil, fmt.Errorf("error finding middleware processes: %w", err)
-	}
-	defer d.Close()
-
-	return d.DiscoverWithOptions(ctx, opts)
-}
-
-func FindContainerJavaProcesses(ctx context.Context) ([]JavaProcess, error) {
-	opts := DefaultDiscoveryOptions()
-	opts.ExcludeContainers = false
-	opts.IncludeContainerInfo = true
-
-	d, err := NewDiscovererWithOptions(ctx, opts)
-	if err != nil {
-		return nil, fmt.Errorf("error finding container java processes: %w", err)
-	}
-	defer d.Close()
-
-	allProcesses, err := d.DiscoverWithOptions(ctx, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	var containerProcesses []JavaProcess
-	for _, proc := range allProcesses {
-		if proc.IsInContainer() {
-			containerProcesses = append(containerProcesses, proc)
-		}
-	}
-	return containerProcesses, nil
-}
 
 // --- Helpers ---
 
@@ -629,13 +548,6 @@ func passesJavaFilter(proc JavaProcess, filter ProcessFilter) bool {
 	}
 	if filter.HasMWAgentOnly && !proc.IsMiddlewareAgent {
 		return false
-	}
-
-	if filter.ServiceNamePattern != "" {
-		// Simple contains check; could use regexp if needed
-		if proc.ServiceName == "" {
-			return false
-		}
 	}
 
 	return true
