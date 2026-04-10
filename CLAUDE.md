@@ -43,8 +43,7 @@ go test -v ./pkg/discovery -run TestParseCommandLine
 ### Key Patterns
 
 **Discovery Pipeline:** Worker pool pattern with configurable concurrency (default: 10 workers). Context-based cancellation. Entry points in `pkg/discovery/discovery.go`:
-- `FindAllJavaProcesses(ctx)`, `FindInstrumentedProcesses(ctx)`, `FindMiddlewareProcesses(ctx)`
-- `FindAllNodeProcesses(ctx)`, `FindAllPythonProcess(ctx)`
+- `FindAllJavaProcesses(ctx)`, `FindAllNodeProcesses(ctx)`, `FindAllPythonProcess(ctx)`
 
 **Service Name Resolution:** 6-level heuristic in `pkg/discovery/service.go`:
 1. Container name → 2. OTEL_SERVICE_NAME env → 3. Systemd unit name → 4. Java system properties → 5. JAR filename → 6. Directory structure

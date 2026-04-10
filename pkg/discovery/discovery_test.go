@@ -18,14 +18,6 @@ func TestDefaultDiscoveryOptions(t *testing.T) {
 	if opts.Timeout != 30*time.Second {
 		t.Errorf("Expected Timeout to be 30s, got %v", opts.Timeout)
 	}
-
-	if !opts.SkipPermissionErrors {
-		t.Errorf("Expected SkipPermissionErrors to be true")
-	}
-
-	if !opts.IncludeMetrics {
-		t.Errorf("Expected IncludeMetrics to be true")
-	}
 }
 
 func TestNewDiscoverer(t *testing.T) {
@@ -186,37 +178,3 @@ func TestRealDiscovery(t *testing.T) {
 	}
 }
 
-// Test discovery with filters
-func TestDiscoveryWithFilters(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Test current user filter
-	processes, err := discovery.FindCurrentUserJavaProcesses(ctx)
-	if err != nil {
-		t.Logf("Current user discovery failed: %v", err)
-		return
-	}
-
-	t.Logf("Found %d Java processes for current user", len(processes))
-
-	// Test instrumented processes filter
-	instrumented, err := discovery.FindInstrumentedProcesses(ctx)
-	if err != nil {
-		t.Logf("Instrumented process discovery failed: %v", err)
-		return
-	}
-
-	t.Logf("Found %d instrumented Java processes", len(instrumented))
-
-	// Validate that all returned processes actually have instrumentation
-	for _, proc := range instrumented {
-		if !proc.HasInstrumentation() {
-			t.Errorf("Process PID %d should have instrumentation but doesn't", proc.ProcessPID)
-		}
-	}
-}
