@@ -209,8 +209,9 @@ func (h *NodeHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 func (h *NodeHandler) extractNodeInfo(proc *Process, cmdArgs []string) {
 	var entryPoint, workingDirectory string
 
-	if wd, err := os.Getwd(); err == nil {
-		workingDirectory = wd
+	// Read the target process's working directory from /proc, not the agent's own cwd.
+	if cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", proc.PID)); err == nil {
+		workingDirectory = cwd
 	}
 
 	for i, arg := range cmdArgs {

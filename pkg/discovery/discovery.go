@@ -159,12 +159,15 @@ func (d *discoverer) enrichWithWorkerPool(ctx context.Context, infos []ProcessIn
 			for info := range jobs {
 				select {
 				case <-ctx.Done():
-					results <- result{nil, ctx.Err()}
 					return
 				default:
 				}
 				proc := handler.Enrich(info, opts, d.containerDetector)
-				results <- result{proc, nil}
+				select {
+				case results <- result{proc, nil}:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}()
 	}
