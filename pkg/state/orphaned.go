@@ -1,3 +1,6 @@
+// Package state provides JSON-based state persistence for tracking instrumented
+// services at /etc/middleware/state/. It also detects orphaned configurations
+// (drop-in files left behind after a process exits) and cleans them up.
 package state
 
 import (
@@ -13,13 +16,13 @@ import (
 
 // FindOrphanedConfigs detects configuration files for stopped/crashed services
 // Moved from main.go and commands/uninstrument.go (consolidated duplicate implementations)
-func FindOrphanedConfigs(runningProcesses []discovery.JavaProcess) ([]OrphanedConfig, error) {
+func FindOrphanedConfigs(runningProcesses []*discovery.Process) ([]OrphanedConfig, error) {
 	var orphaned []OrphanedConfig
 
 	// Get all running process config paths
 	runningConfigs := make(map[string]bool)
 	for _, proc := range runningProcesses {
-		configPath := getConfigPath(&proc)
+		configPath := getConfigPath(proc)
 		runningConfigs[configPath] = true
 	}
 
@@ -98,7 +101,7 @@ func RemoveOrphanedConfig(config OrphanedConfig) error {
 }
 
 // ScanAndSaveOrphaned scans for orphaned configs and saves the state
-func ScanAndSaveOrphaned(runningProcesses []discovery.JavaProcess) error {
+func ScanAndSaveOrphaned(runningProcesses []*discovery.Process) error {
 	orphaned, err := FindOrphanedConfigs(runningProcesses)
 	if err != nil {
 		return fmt.Errorf("failed to find orphaned configs: %w", err)
@@ -173,10 +176,10 @@ func ValidateOrphanedConfigs(configs []OrphanedConfig) []OrphanedConfig {
 // Helper functions
 
 // getConfigPath generates the config path for a Java process
-func getConfigPath(proc *discovery.JavaProcess) string {
+func getConfigPath(proc *discovery.Process) string {
 	serviceName := naming.GenerateServiceName(proc)
 
-	if proc.IsTomcat() {
+	if proc.DetailBool(discovery.DetailIsTomcat) {
 		return fmt.Sprintf("/etc/middleware/tomcat/%s.conf", serviceName)
 	}
 
@@ -185,8 +188,8 @@ func getConfigPath(proc *discovery.JavaProcess) string {
 }
 
 // detectDeploymentType determines the deployment type for a process
-func detectDeploymentType(proc *discovery.JavaProcess) string {
-	if proc.ProcessOwner != "root" && proc.ProcessOwner != os.Getenv("USER") {
+func detectDeploymentType(proc *discovery.Process) string {
+	if proc.Owner != "root" && proc.Owner != os.Getenv("USER") {
 		return "systemd"
 	}
 	return "standalone"

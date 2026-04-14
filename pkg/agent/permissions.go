@@ -1,3 +1,6 @@
+// Package agent provides Java agent installation, validation, and file
+// permission management. It ensures agent JARs are readable by the process
+// owners that need them.
 package agent
 
 import (
@@ -38,7 +41,7 @@ func CheckAccessibleBySystemd(agentPath string, username string) error {
 
 // ValidateAccessForUsers validates agent access for multiple users
 // Moved from main.go: ensureAgentAccessibleForAll()
-func ValidateAccessForUsers(agentPath string, processes []discovery.JavaProcess) (string, error) {
+func ValidateAccessForUsers(agentPath string, processes []*discovery.Process) (string, error) {
 	// Check if file exists
 	if _, err := os.Stat(agentPath); err != nil {
 		return "", fmt.Errorf("agent file does not exist: %s", agentPath)
@@ -51,7 +54,7 @@ func ValidateAccessForUsers(agentPath string, processes []discovery.JavaProcess)
 	// Collect all unique users
 	users := make(map[string]bool)
 	for _, proc := range processes {
-		users[proc.ProcessOwner] = true
+		users[proc.Owner] = true
 	}
 
 	// Check accessibility for each user
@@ -109,14 +112,14 @@ func ValidateAccessForUsers(agentPath string, processes []discovery.JavaProcess)
 
 // EnsureAccessibleForSingle ensures agent is accessible for a single process
 // Moved from main.go: ensureAgentAccessible()
-func EnsureAccessibleForSingle(agentPath string, proc *discovery.JavaProcess) (string, error) {
+func EnsureAccessibleForSingle(agentPath string, proc *discovery.Process) (string, error) {
 	// First check if it's already accessible
-	if err := ValidateAgentPathForUser(agentPath, proc.ProcessOwner); err == nil {
+	if err := ValidateAgentPathForUser(agentPath, proc.Owner); err == nil {
 		return agentPath, nil
 	}
 
 	// If not accessible, offer to copy to shared location
-	fmt.Printf("\n[warn]  Warning: User '%s' cannot access %s\n", proc.ProcessOwner, agentPath)
+	fmt.Printf("\n[warn]  Warning: User '%s' cannot access %s\n", proc.Owner, agentPath)
 	fmt.Print("   Copy agent to /opt/middleware/agents/? [Y/n]: ")
 
 	reader := bufio.NewReader(os.Stdin)
@@ -156,7 +159,7 @@ func EnsureAccessibleForSingle(agentPath string, proc *discovery.JavaProcess) (s
 	fmt.Printf("   [ok] Copied agent to: %s\n", newPath)
 
 	// Verify the new path is accessible
-	if err := CheckAccessibleByUser(newPath, proc.ProcessOwner); err != nil {
+	if err := CheckAccessibleByUser(newPath, proc.Owner); err != nil {
 		return "", fmt.Errorf("copied agent still not accessible: %v", err)
 	}
 

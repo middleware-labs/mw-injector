@@ -1,3 +1,10 @@
+// dropin.go creates and removes systemd drop-in configuration files that
+// inject OTel environment variables (LD_PRELOAD, OTEL_SERVICE_NAME, etc.)
+// into service units. Drop-in files are placed at:
+//
+//	/etc/systemd/system/{unit}.service.d/middleware-otel.conf
+//
+// After writing, systemd is reloaded and the service restarted.
 package otelinject
 
 import (

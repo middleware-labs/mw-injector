@@ -56,32 +56,32 @@ func TestAgentTypeString(t *testing.T) {
 	}
 }
 
-func TestJavaProcessFormatAgentStatus(t *testing.T) {
+func TestProcessFormatAgentStatus(t *testing.T) {
 	tests := []struct {
 		name           string
-		process        discovery.JavaProcess
+		process        discovery.Process
 		expectedStatus string
 	}{
 		{
 			name:           "No agent",
-			process:        discovery.JavaProcess{HasJavaAgent: false},
+			process:        discovery.Process{HasAgent: false},
 			expectedStatus: "[x] None",
 		},
 		{
 			name: "Middleware agent",
-			process: discovery.JavaProcess{
-				HasJavaAgent:      true,
+			process: discovery.Process{
+				HasAgent:          true,
 				IsMiddlewareAgent: true,
-				JavaAgentPath:     "/opt/middleware-javaagent-1.7.0.jar",
+				AgentPath:         "/opt/middleware-javaagent-1.7.0.jar",
 			},
 			expectedStatus: "[ok] MW",
 		},
 		{
 			name: "OpenTelemetry agent",
-			process: discovery.JavaProcess{
-				HasJavaAgent:      true,
+			process: discovery.Process{
+				HasAgent:          true,
 				IsMiddlewareAgent: false,
-				JavaAgentPath:     "/opt/opentelemetry-javaagent.jar",
+				AgentPath:         "/opt/opentelemetry-javaagent.jar",
 			},
 			expectedStatus: "[ok] OTel",
 		},
@@ -97,20 +97,20 @@ func TestJavaProcessFormatAgentStatus(t *testing.T) {
 	}
 }
 
-func TestJavaProcessHasInstrumentation(t *testing.T) {
+func TestProcessHasInstrumentation(t *testing.T) {
 	tests := []struct {
 		name     string
-		process  discovery.JavaProcess
+		process  discovery.Process
 		expected bool
 	}{
 		{
 			name:     "No agent",
-			process:  discovery.JavaProcess{HasJavaAgent: false},
+			process:  discovery.Process{HasAgent: false},
 			expected: false,
 		},
 		{
 			name:     "With agent",
-			process:  discovery.JavaProcess{HasJavaAgent: true},
+			process:  discovery.Process{HasAgent: true},
 			expected: true,
 		},
 	}
@@ -151,29 +151,30 @@ func TestRealDiscovery(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	processes, err := discovery.FindAllJavaProcesses(ctx)
+	allProcs, err := discovery.FindAllProcesses(ctx)
 	if err != nil {
-		t.Logf("Discovery failed (this is OK if no Java processes are running): %v", err)
+		t.Logf("Discovery failed (this is OK if no processes are running): %v", err)
 		return
 	}
 
-	t.Logf("Found %d Java processes", len(processes))
+	for lang, processes := range allProcs {
+		t.Logf("Found %d %s processes", len(processes), lang)
 
-	for _, proc := range processes {
-		t.Logf("Process: PID=%d, Service=%s, JAR=%s, Agent=%s",
-			proc.ProcessPID, proc.ServiceName, proc.JarFile, proc.FormatAgentStatus())
+		for _, proc := range processes {
+			t.Logf("Process: PID=%d, Service=%s, Lang=%s, Agent=%s",
+				proc.PID, proc.ServiceName, proc.Language, proc.FormatAgentStatus())
 
-		// Validate required fields
-		if proc.ProcessPID == 0 {
-			t.Errorf("Process PID should not be 0")
-		}
+			if proc.PID == 0 {
+				t.Errorf("Process PID should not be 0")
+			}
 
-		if proc.ProcessExecutableName == "" {
-			t.Errorf("Process executable name should not be empty")
-		}
+			if proc.ExecutableName == "" {
+				t.Errorf("Process executable name should not be empty")
+			}
 
-		if proc.ServiceName == "" {
-			t.Logf("Warning: Service name is empty for PID %d", proc.ProcessPID)
+			if proc.ServiceName == "" {
+				t.Logf("Warning: Service name is empty for PID %d", proc.PID)
+			}
 		}
 	}
 }

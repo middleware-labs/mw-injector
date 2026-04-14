@@ -1,3 +1,7 @@
+// injector_node.go implements OtelInjector for Node.js processes. It discovers
+// running Node processes via the discovery package, validates that the Node
+// agent register.js and libotelinject.so are present, and instruments/uninstruments
+// them via systemd drop-in files.
 package otelinject
 
 import (
@@ -19,13 +23,13 @@ type NodeAgentStatus struct {
 }
 
 type NodeSystemdInjector struct {
-	NodeProcs []discovery.NodeProcess
+	NodeProcs []*discovery.Process
 	Status    NodeAgentStatus
 }
 
 func NewNodeSystemdInjector() (*NodeSystemdInjector, error) {
 	ctx := context.Background()
-	nodeProcs, err := discovery.FindAllNodeProcesses(ctx)
+	nodeProcs, err := discovery.FindProcessesByLanguage(ctx, discovery.LangNode)
 	if err != nil {
 		return nil, fmt.Errorf("error creating NodeSystemdInjector: %w", err)
 	}
@@ -50,7 +54,7 @@ func (n *NodeSystemdInjector) Instrument() error {
 	}
 	var errorsInstrumentation error
 	for _, proc := range n.NodeProcs {
-		isSystemd, cleanName := discovery.CheckSystemdStatus(proc.ProcessPID)
+		isSystemd, cleanName := discovery.CheckSystemdStatus(proc.PID)
 		if !isSystemd {
 			continue
 		}
@@ -70,7 +74,7 @@ func (n *NodeSystemdInjector) Instrument() error {
 func (n *NodeSystemdInjector) Uninstrument() error {
 	var errs error
 	for _, proc := range n.NodeProcs {
-		isSystemd, cleanName := discovery.CheckSystemdStatus(proc.ProcessPID)
+		isSystemd, cleanName := discovery.CheckSystemdStatus(proc.PID)
 		if !isSystemd {
 			continue
 		}
@@ -78,7 +82,7 @@ func (n *NodeSystemdInjector) Uninstrument() error {
 		if err := removeSystemdDropIn(cleanName); err != nil {
 			errs = errors.Join(
 				errs,
-				fmt.Errorf("could not remove dropIn for %s and pid %d, %w", cleanName, proc.ProcessPID, err),
+				fmt.Errorf("could not remove dropIn for %s and pid %d, %w", cleanName, proc.PID, err),
 			)
 		}
 	}
@@ -86,11 +90,11 @@ func (n *NodeSystemdInjector) Uninstrument() error {
 }
 
 func (n *NodeSystemdInjector) InstrumentService(service discovery.ServiceSetting) error {
-	nodeProcToInstrument := n.getNodeProcToInstrument(service.PID)
-	if nodeProcToInstrument == nil {
+	proc := n.getProcToInstrument(service.PID)
+	if proc == nil {
 		return fmt.Errorf("could not find node process: %v running on the host", service)
 	}
-	isSystemd, unitName := discovery.CheckSystemdStatus(nodeProcToInstrument.ProcessPID)
+	isSystemd, unitName := discovery.CheckSystemdStatus(proc.PID)
 	if !isSystemd {
 		return fmt.Errorf("given node process is not a systemd process: %v", service)
 	}
@@ -110,13 +114,12 @@ func (n *NodeSystemdInjector) InstrumentService(service discovery.ServiceSetting
 	}
 
 	return nil
-
 }
 
-func (n *NodeSystemdInjector) getNodeProcToInstrument(pid int32) *discovery.NodeProcess {
+func (n *NodeSystemdInjector) getProcToInstrument(pid int32) *discovery.Process {
 	for _, proc := range n.NodeProcs {
-		if proc.ProcessPID == pid {
-			return &proc
+		if proc.PID == pid {
+			return proc
 		}
 	}
 	return nil

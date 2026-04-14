@@ -1,3 +1,6 @@
+// instrumentation.go defines agent type classification (Middleware, OpenTelemetry,
+// Other), ServiceSetting for backend reporting, and helpers for detecting
+// LD_PRELOAD-based OTel injection and deriving agent types from paths.
 package discovery
 
 import (
@@ -17,9 +20,9 @@ func extractLibOtelInjectPath(ldPreload string) string {
 	return ""
 }
 
-// GetAgentInfo returns detailed information about the detected agent
-func (jp *JavaProcess) GetAgentInfo() *AgentInfo {
-	if !jp.HasJavaAgent {
+// GetAgentInfo returns detailed information about the detected agent.
+func (p *Process) GetAgentInfo() *AgentInfo {
+	if !p.HasAgent {
 		return &AgentInfo{Type: AgentNone}
 	}
 
@@ -27,12 +30,12 @@ func (jp *JavaProcess) GetAgentInfo() *AgentInfo {
 	version := "unknown"
 	isServerless := false
 
-	if jp.IsMiddlewareAgent {
+	if p.IsMiddlewareAgent {
 		agentType = AgentMiddleware
-		version = extractMWAgentVersion(jp.JavaAgentPath)
-		isServerless = isMWServerlessAgent(jp.JavaAgentPath)
+		version = extractMWAgentVersion(p.AgentPath)
+		isServerless = isMWServerlessAgent(p.AgentPath)
 	} else {
-		detectedType := detectJavaAgentType(jp.JavaAgentPath)
+		detectedType := detectJavaAgentType(p.AgentPath)
 		if detectedType != AgentOther {
 			agentType = detectedType
 		}
@@ -40,21 +43,21 @@ func (jp *JavaProcess) GetAgentInfo() *AgentInfo {
 
 	return &AgentInfo{
 		Type:         agentType,
-		Path:         jp.JavaAgentPath,
-		Name:         jp.JavaAgentName,
+		Path:         p.AgentPath,
+		Name:         p.AgentName,
 		Version:      version,
 		IsServerless: isServerless,
 	}
 }
 
-// FormatAgentStatus returns a human-readable agent status string
-func (jp *JavaProcess) FormatAgentStatus() string {
+// FormatAgentStatus returns a human-readable agent status string.
+func (p *Process) FormatAgentStatus() string {
 	var status string
 
-	if !jp.HasJavaAgent {
+	if !p.HasAgent {
 		status = "[x] None"
 	} else {
-		agentInfo := jp.GetAgentInfo()
+		agentInfo := p.GetAgentInfo()
 		switch agentInfo.Type {
 		case AgentMiddleware:
 			if agentInfo.IsServerless {
@@ -71,29 +74,29 @@ func (jp *JavaProcess) FormatAgentStatus() string {
 		}
 	}
 
-	if jp.IsInContainer() {
-		status += fmt.Sprintf(" (container: %s)", jp.GetContainerRuntime())
+	if p.IsInContainer() {
+		status += fmt.Sprintf(" (container: %s)", p.GetContainerRuntime())
 	}
 
 	return status
 }
 
-// HasInstrumentation checks if the process has any form of instrumentation
-func (jp *JavaProcess) HasInstrumentation() bool {
-	return jp.HasJavaAgent
+// HasInstrumentation checks if the process has any form of instrumentation.
+func (p *Process) HasInstrumentation() bool {
+	return p.HasAgent
 }
 
-// HasMiddlewareInstrumentation checks specifically for Middleware instrumentation
-func (jp *JavaProcess) HasMiddlewareInstrumentation() bool {
-	return jp.IsMiddlewareAgent
+// HasMiddlewareInstrumentation checks specifically for Middleware instrumentation.
+func (p *Process) HasMiddlewareInstrumentation() bool {
+	return p.IsMiddlewareAgent
 }
 
-// IsServerless checks if this appears to be a serverless deployment
-func (jp *JavaProcess) IsServerless() bool {
-	if !jp.HasJavaAgent {
+// IsServerless checks if this appears to be a serverless deployment.
+func (p *Process) IsServerless() bool {
+	if !p.HasAgent {
 		return false
 	}
-	return jp.GetAgentInfo().IsServerless
+	return p.GetAgentInfo().IsServerless
 }
 
 // --- Private helpers ---
@@ -125,4 +128,3 @@ func isMWServerlessAgent(agentPath string) bool {
 	}
 	return false
 }
-

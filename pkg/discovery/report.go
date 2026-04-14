@@ -1,8 +1,10 @@
+// report.go builds the AgentReportValue sent to the Middleware backend. It
+// discovers all processes, converts them to ServiceSettings via each handler's
+// ToServiceSetting method, and assembles the final report payload.
 package discovery
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -38,66 +40,48 @@ type OSConfig struct {
 	AgentRestartStatus          bool                      `json:"agent_restart_status"`
 	AutoInstrumentationInit     bool                      `json:"auto_instrumentation_init"`
 	AutoInstrumentationSettings map[string]ServiceSetting `json:"auto_instrumentation_settings"`
-	// Add other OS-specific fields (darwin, windows, k8s, etc.) if needed
 }
 
 // AgentReportValue is the root structure for the 'value' field's JSON content.
 type AgentReportValue map[string]OSConfig
 
-
+// GetAgentReportValue discovers all processes and converts them to an
+// AgentReportValue for backend reporting. Uses the handler registry to
+// loop over all supported languages.
 func GetAgentReportValue() (AgentReportValue, error) {
-	// --- 1. Perform Process Discovery ---
 	ctx := context.Background()
-	var discoverErrs error
+	opts := DefaultDiscoveryOptions()
+	opts.ExcludeContainers = false
+	opts.IncludeContainerInfo = true
 
-	// a) Host Processes (Java)
-	processes, err := FindAllJavaProcesses(ctx)
+	d, err := NewDiscovererWithOptions(ctx, opts)
 	if err != nil {
-		discoverErrs = errors.Join(discoverErrs, fmt.Errorf("java discovery failed: %w", err))
+		return nil, fmt.Errorf("failed to create discoverer: %w", err)
 	}
+	defer d.Close()
 
-	// b) Node Processes
-	nodeProcs, err := FindAllNodeProcesses(ctx)
-	if err != nil {
-		discoverErrs = errors.Join(discoverErrs, fmt.Errorf("node discovery failed: %w", err))
-	}
+	allProcs, discoverErrs := d.DiscoverAll(ctx)
 
-	// c) Python Processes
-	pythonProcs, err := FindAllPythonProcess(ctx)
-	if err != nil {
-		discoverErrs = errors.Join(discoverErrs, fmt.Errorf("python discovery failed: %w", err))
-	}
-
-	// --- 2. SWEEP (Garbage Collection) ---
-	// Simple call. No arguments.
-	// It automatically removes any process not seen in the last 10 minutes.
+	// Garbage collection — remove stale cache entries
 	PruneProcessCache()
 	PruneContainerNameCache()
 
-	// --- 3. Convert to AgentReportValue (Reporting) ---
-	osKey := runtime.GOOS
+	// Convert all discovered processes to ServiceSettings using each
+	// language's handler for the conversion.
 	settings := map[string]ServiceSetting{}
-
-	// Convert Java
-	for _, proc := range processes {
-		if !proc.IsTomcat() {
-			setting := convertJavaProcessToServiceSetting(proc)
-			settings[setting.Key] = setting
+	for lang, procs := range allProcs {
+		handler := d.handlerRegistry.ForLanguage(lang)
+		if handler == nil {
+			continue
+		}
+		for _, proc := range procs {
+			if ss := handler.ToServiceSetting(proc); ss != nil {
+				settings[ss.Key] = *ss
+			}
 		}
 	}
 
-	// Convert Python
-	for _, proc := range pythonProcs {
-		setting := convertPythonProcessToServiceSetting(proc)
-		settings[setting.Key] = setting
-	}
-
-	// Convert Node
-	for _, proc := range nodeProcs {
-		setting := convertNodeProcessToServiceSetting(proc)
-		settings[setting.Key] = setting
-	}
-
+	osKey := runtime.GOOS
 	reportValue := AgentReportValue{
 		osKey: OSConfig{
 			AgentRestartStatus:          false,
@@ -109,197 +93,9 @@ func GetAgentReportValue() (AgentReportValue, error) {
 	return reportValue, discoverErrs
 }
 
-// Placeholder for logic that converts discovery.Container to ServiceSetting
-func convertJavaContainerToServiceSetting(container DockerContainer) ServiceSetting {
-	// Generate a unique key for the container service
-	key := container.ContainerID
-	if len(key) >= 12 {
-		key = key[:12]
-	}
-	// You can access the embedded JavaProcess like this: container.JavaProcess
-
-	return ServiceSetting{
-		ServiceName: container.ContainerName,
-		// ... fill other fields from container.ContainerInfo and container.JavaProcess ...
-		ServiceType: "docker",
-		Language:    "java",
-		Key:         key,
-	}
-}
-
-func convertNodeProcessToServiceSetting(proc NodeProcess) ServiceSetting {
-	// 1. Generate a stable Key
-
-	key := fmt.Sprintf("host-node-%s", sanitize(proc.ServiceName))
-	isSystemd, unitname := CheckSystemdStatus(proc.ProcessPID)
-	serviceType := "system"
-	if isSystemd {
-		serviceType = "systemd"
-	}
-
-	// Handle Container Infrastructure
-	if proc.IsInContainer() {
-		serviceType = "docker"
-		if proc.ContainerInfo.ContainerID != "" {
-			// Use Container ID for the key to prevent PID collisions
-			key = fmt.Sprintf("docker-node-%s", proc.ContainerInfo.ContainerID[:12])
-			proc.ServiceName = proc.ContainerInfo.ContainerName
-		}
-	}
-
-	agentType := deriveAgentType(proc.HasNodeAgent, proc.NodeAgentPath, proc.IsMiddlewareAgent)
-
-	return ServiceSetting{
-		PID:               proc.ProcessPID,
-		ServiceName:       proc.ServiceName,
-		Owner:             proc.ProcessOwner,
-		Status:            proc.Status,
-		Enabled:           true,
-		ServiceType:       serviceType,
-		Language:          "node",
-		RuntimeVersion:    proc.ProcessRuntimeVersion,
-		HasAgent:          proc.HasNodeAgent,
-		IsMiddlewareAgent: proc.IsMiddlewareAgent,
-		AgentType:         agentType,
-		AgentPath:         proc.NodeAgentPath,
-		Instrumented:      proc.HasNodeAgent,
-		Key:               key,
-		SystemdUnit:       unitname,
-	}
-}
-
-func convertPythonProcessToServiceSetting(proc PythonProcess) ServiceSetting {
-	// Generate a unique key for the service
-
-	key := fmt.Sprintf("host-python-%s", sanitize(proc.ServiceName))
-	isSystemd, unitname := CheckSystemdStatus(proc.ProcessPID)
-	serviceType := "system"
-	if isSystemd {
-		serviceType = "systemd"
-	}
-
-	if proc.IsInContainer() {
-		serviceType = "docker"
-	} else if proc.IsCeleryProcess {
-		serviceType = "worker"
-	}
-
-	return ServiceSetting{
-		PID:            proc.ProcessPID,
-		ServiceName:    proc.ServiceName,
-		Owner:          proc.ProcessOwner,
-		Status:         proc.Status,
-		Enabled:        true, // Discovered processes are instrumentation candidates
-		ServiceType:    serviceType,
-		Language:       "python",
-		RuntimeVersion: proc.ProcessRuntimeVersion,
-
-		// Python specific "Main" info
-		MainClass: proc.ModulePath, // If using -m
-		JarFile:   proc.EntryPoint, // If using script.py
-
-		// Instrumentation Status
-		HasAgent:          proc.HasPythonAgent,
-		IsMiddlewareAgent: proc.IsMiddlewareAgent,
-		AgentType:         proc.PythonAgentType.String(),
-		AgentPath:         proc.PythonAgentPath,
-		Instrumented:      proc.HasPythonAgent,
-
-		// Metadata and Unique Key
-		Key:            key,
-		ProcessManager: proc.ProcessManager,
-		SystemdUnit:    unitname,
-	}
-}
-
-func convertNodeContainerToServiceSetting(container DockerContainer) ServiceSetting {
-	// Generate a unique key for the container service. We'll use the container's short ID.
-	containerID := container.ContainerID
-	key := ""
-	if len(containerID) >= 12 {
-		key = containerID[:12] // Use short ID as key
-	} else {
-		key = containerID // Fallback if ID is too short
-	}
-
-	// Determine if the container is currently instrumented.
-	// The Container struct has an IsInstrumented field.
-	isInstrumented := container.Instrumented
-
-	// Determine agent path (specific to Node.js agent, if instrumented)
-	agentPath := ""
-	if isInstrumented {
-		// Assume the Node agent path is known or retrievable from the container struct's details
-		// For a clean conversion, we'll use a placeholder or check a specific field if available.
-		// If the discovery struct doesn't expose the path, we infer a default or leave blank.
-		agentPath = container.NodeAgentPath // Assuming this field exists on the discovery.Container struct
-		if agentPath == "" {
-			agentPath = "/opt/opentelemetry/node_agent" // Common default location
-		}
-	}
-
-	return ServiceSetting{
-		// PID is not always relevant or stable for containers, often left 0 or 1
-		PID:            0,
-		ServiceName:    container.ContainerName,
-		Status:         "running", // Containers are assumed running if discovered
-		Enabled:        true,      // Available for instrumentation
-		ServiceType:    "docker",
-		Language:       "nodejs",
-		RuntimeVersion: "", // Version often hard to determine from outside container, leave empty or look up
-
-		// Tomcat/Systemd specific fields are omitted for Docker/Node
-		SystemdUnit: "",
-		JarFile:     "",
-		MainClass:   "",
-
-		HasAgent:          isInstrumented,
-		IsMiddlewareAgent: isInstrumented, // Assuming only Middleware agent is tracked
-		AgentPath:         agentPath,
-		Instrumented:      isInstrumented,
-		Key:               fmt.Sprintf("docker-node-%s", key), // Unique and descriptive key prefix
-	}
-}
-
-func convertJavaProcessToServiceSetting(proc JavaProcess) ServiceSetting {
-	key := fmt.Sprintf("host-java-%s", sanitize(proc.ServiceName))
-	isSystemd, unitname := CheckSystemdStatus(proc.ProcessPID)
-
-	deploymentType := "standalone"
-	if proc.IsInContainer() {
-		deploymentType = "docker"
-	} else if isSystemd {
-		deploymentType = "systemd"
-	}
-
-	agentType := deriveAgentType(proc.HasJavaAgent, proc.JavaAgentPath, proc.IsMiddlewareAgent)
-
-	return ServiceSetting{
-		PID:               proc.ProcessPID,
-		ServiceName:       proc.ServiceName,
-		Owner:             proc.ProcessOwner,
-		Status:            proc.Status,
-		Enabled:           true,
-		ServiceType:       deploymentType,
-		Language:          "java",
-		RuntimeVersion:    proc.ProcessRuntimeVersion,
-		JarFile:           proc.JarFile,
-		MainClass:         proc.MainClass,
-		HasAgent:          proc.HasJavaAgent,
-		IsMiddlewareAgent: proc.IsMiddlewareAgent,
-		AgentType:         agentType,
-		AgentPath:         proc.JavaAgentPath,
-		Instrumented:      proc.HasJavaAgent,
-		Key:               key,
-		SystemdUnit:       unitname,
-	}
-}
-
 // ApplyStoredInstrumentThis merges instrument_this flags from storedSettings into
 // currentSettings. All current services are returned; instrument_this is set to true
 // only when a stored entry with a matching (service_name, language) has InstrumentThis=true.
-// This preserves user-configured flags across agent report cycles without filtering out
-// services that the user has not yet chosen to instrument.
 func ApplyStoredInstrumentThis(
 	storedSettings map[string]ServiceSetting,
 	currentSettings map[string]ServiceSetting,
@@ -347,11 +143,9 @@ func And(predicates ...func(ServiceSetting) bool) func(ServiceSetting) bool {
 }
 
 func FilterInstrumentable(
-	storedSettings map[string]ServiceSetting, // Coming from the database
-	currentSettings map[string]ServiceSetting, // Coming from the live system
+	storedSettings map[string]ServiceSetting,
+	currentSettings map[string]ServiceSetting,
 ) map[string]ServiceSetting {
-	// Build a lookup index from current settings keyed by (service_name, language)
-	// since PIDs change across restarts, making key-based matching unreliable.
 	type serviceIdentity struct {
 		ServiceName string
 		Language    string
@@ -371,12 +165,9 @@ func FilterInstrumentable(
 		id := serviceIdentity{stored.ServiceName, stored.Language}
 		current, exists := currentIndex[id]
 		if !exists {
-			// Was marked for instrumentation but is no longer running
 			continue
 		}
 
-		// Use current (live) entry for fresh PID/status/paths,
-		// but carry over InstrumentThis from the stored setting
 		current.InstrumentThis = true
 		result[current.Key] = current
 	}
@@ -412,7 +203,7 @@ func sanitize(s string) string {
 }
 
 // parseCgroupUnitName reads /proc/<pid>/cgroup and returns the innermost
-// non-user systemd unit name. Single source of truth for all cgroup parsing.
+// non-user systemd unit name.
 func parseCgroupUnitName(pid int32) (string, bool) {
 	path := fmt.Sprintf("/proc/%d/cgroup", pid)
 	data, err := os.ReadFile(path)

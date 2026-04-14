@@ -1,3 +1,6 @@
+// container.go detects whether a process runs inside a container by parsing
+// /proc/{pid}/cgroup and /proc/{pid}/mountinfo. It also resolves container
+// names via the Docker socket for display in the discovery report.
 package discovery
 
 import (

@@ -1,3 +1,8 @@
+// validate.go provides agent asset validation for Java, Node, and Python
+// OTel agents. Each Validate*Agent function checks that the required files
+// (JARs, shared libraries, Python packages, etc.) are present in the expected
+// locations. Also includes libc flavor detection for selecting the correct
+// shared library variant.
 package otelinject
 
 import (

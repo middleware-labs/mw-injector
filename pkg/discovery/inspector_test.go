@@ -2,191 +2,160 @@ package discovery
 
 import "testing"
 
-func TestJavaInspector(t *testing.T) {
+func TestJavaHandlerDetect(t *testing.T) {
 	tests := []struct {
-		name     string
-		proc     ProcessInfo
-		wantLang Language
-		wantOK   bool
+		name   string
+		proc   ProcessInfo
+		wantOK bool
 	}{
 		{
-			name:     "standard java executable",
-			proc:     ProcessInfo{ExeName: "java", CmdLine: "java -jar app.jar"},
-			wantLang: LangJava,
-			wantOK:   true,
+			name:   "standard java executable",
+			proc:   ProcessInfo{ExeName: "java", CmdLine: "java -jar app.jar"},
+			wantOK: true,
 		},
 		{
-			name:     "java in path-like exe name",
-			proc:     ProcessInfo{ExeName: "java", ExePath: "/usr/lib/jvm/java-17/bin/java", CmdLine: "/usr/lib/jvm/java-17/bin/java -jar app.jar"},
-			wantLang: LangJava,
-			wantOK:   true,
+			name:   "java in path-like exe name",
+			proc:   ProcessInfo{ExeName: "java", ExePath: "/usr/lib/jvm/java-17/bin/java", CmdLine: "/usr/lib/jvm/java-17/bin/java -jar app.jar"},
+			wantOK: true,
 		},
 		{
-			name:     "not java",
-			proc:     ProcessInfo{ExeName: "python3", CmdLine: "python3 app.py"},
-			wantLang: "",
-			wantOK:   false,
+			name:   "not java",
+			proc:   ProcessInfo{ExeName: "python3", CmdLine: "python3 app.py"},
+			wantOK: false,
 		},
 		{
-			name:     "java in cmdline only",
-			proc:     ProcessInfo{ExeName: "some-wrapper", CmdLine: "java -Xmx512m -jar service.jar"},
-			wantLang: LangJava,
-			wantOK:   true,
+			name:   "java in cmdline only",
+			proc:   ProcessInfo{ExeName: "some-wrapper", CmdLine: "java -Xmx512m -jar service.jar"},
+			wantOK: true,
 		},
 	}
 
-	inspector := &JavaInspector{}
+	handler := &JavaHandler{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			lang, ok := inspector.Inspect(&tt.proc)
+			ok := handler.Detect(&tt.proc)
 			if ok != tt.wantOK {
-				t.Errorf("Inspect() ok = %v, want %v", ok, tt.wantOK)
-			}
-			if lang != tt.wantLang {
-				t.Errorf("Inspect() lang = %q, want %q", lang, tt.wantLang)
+				t.Errorf("Detect() = %v, want %v", ok, tt.wantOK)
 			}
 		})
 	}
 }
 
-func TestNodeInspector(t *testing.T) {
+func TestNodeHandlerDetect(t *testing.T) {
 	tests := []struct {
-		name     string
-		proc     ProcessInfo
-		wantLang Language
-		wantOK   bool
+		name   string
+		proc   ProcessInfo
+		wantOK bool
 	}{
 		{
-			name:     "node executable",
-			proc:     ProcessInfo{ExeName: "node", CmdLine: "node server.js"},
-			wantLang: LangNode,
-			wantOK:   true,
+			name:   "node executable",
+			proc:   ProcessInfo{ExeName: "node", CmdLine: "node server.js"},
+			wantOK: true,
 		},
 		{
-			name:     "nodejs executable",
-			proc:     ProcessInfo{ExeName: "nodejs", CmdLine: "nodejs app.js"},
-			wantLang: LangNode,
-			wantOK:   true,
+			name:   "nodejs executable",
+			proc:   ProcessInfo{ExeName: "nodejs", CmdLine: "nodejs app.js"},
+			wantOK: true,
 		},
 		{
-			name:     "npm start pattern",
-			proc:     ProcessInfo{ExeName: "npm", CmdLine: "npm start"},
-			wantLang: LangNode,
-			wantOK:   true,
+			name:   "npm start pattern",
+			proc:   ProcessInfo{ExeName: "npm", CmdLine: "npm start"},
+			wantOK: true,
 		},
 		{
-			name:     "npx pattern",
-			proc:     ProcessInfo{ExeName: "npx", CmdLine: "npx ts-node server.ts"},
-			wantLang: LangNode,
-			wantOK:   true,
+			name:   "npx pattern",
+			proc:   ProcessInfo{ExeName: "npx", CmdLine: "npx ts-node server.ts"},
+			wantOK: true,
 		},
 		{
-			name:     "not node",
-			proc:     ProcessInfo{ExeName: "python3", CmdLine: "python3 app.py"},
-			wantLang: "",
-			wantOK:   false,
+			name:   "not node",
+			proc:   ProcessInfo{ExeName: "python3", CmdLine: "python3 app.py"},
+			wantOK: false,
 		},
 	}
 
-	inspector := &NodeInspector{}
+	handler := &NodeHandler{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			lang, ok := inspector.Inspect(&tt.proc)
+			ok := handler.Detect(&tt.proc)
 			if ok != tt.wantOK {
-				t.Errorf("Inspect() ok = %v, want %v", ok, tt.wantOK)
-			}
-			if lang != tt.wantLang {
-				t.Errorf("Inspect() lang = %q, want %q", lang, tt.wantLang)
+				t.Errorf("Detect() = %v, want %v", ok, tt.wantOK)
 			}
 		})
 	}
 }
 
-func TestPythonInspector(t *testing.T) {
+func TestPythonHandlerDetect(t *testing.T) {
 	tests := []struct {
-		name     string
-		proc     ProcessInfo
-		wantLang Language
-		wantOK   bool
+		name   string
+		proc   ProcessInfo
+		wantOK bool
 	}{
 		{
-			name:     "python3 executable",
-			proc:     ProcessInfo{ExeName: "python3", CmdLine: "python3 app.py"},
-			wantLang: LangPython,
-			wantOK:   true,
+			name:   "python3 executable",
+			proc:   ProcessInfo{ExeName: "python3", CmdLine: "python3 app.py"},
+			wantOK: true,
 		},
 		{
-			name:     "python executable",
-			proc:     ProcessInfo{ExeName: "python", CmdLine: "python app.py"},
-			wantLang: LangPython,
-			wantOK:   true,
+			name:   "python executable",
+			proc:   ProcessInfo{ExeName: "python", CmdLine: "python app.py"},
+			wantOK: true,
 		},
 		{
-			name:     "gunicorn binary",
-			proc:     ProcessInfo{ExeName: "gunicorn", CmdLine: "gunicorn app:app"},
-			wantLang: LangPython,
-			wantOK:   true,
+			name:   "gunicorn binary",
+			proc:   ProcessInfo{ExeName: "gunicorn", CmdLine: "gunicorn app:app"},
+			wantOK: true,
 		},
 		{
-			name:     "uvicorn binary",
-			proc:     ProcessInfo{ExeName: "uvicorn", CmdLine: "uvicorn main:app"},
-			wantLang: LangPython,
-			wantOK:   true,
+			name:   "uvicorn binary",
+			proc:   ProcessInfo{ExeName: "uvicorn", CmdLine: "uvicorn main:app"},
+			wantOK: true,
 		},
 		{
-			name:     "celery binary",
-			proc:     ProcessInfo{ExeName: "celery", CmdLine: "celery -A tasks worker"},
-			wantLang: LangPython,
-			wantOK:   true,
+			name:   "celery binary",
+			proc:   ProcessInfo{ExeName: "celery", CmdLine: "celery -A tasks worker"},
+			wantOK: true,
 		},
 		{
-			name:     "python3.10 versioned",
-			proc:     ProcessInfo{ExeName: "python3.10", CmdLine: "python3.10 manage.py runserver"},
-			wantLang: LangPython,
-			wantOK:   true,
+			name:   "python3.10 versioned",
+			proc:   ProcessInfo{ExeName: "python3.10", CmdLine: "python3.10 manage.py runserver"},
+			wantOK: true,
 		},
 		{
-			name:     "pypy runtime",
-			proc:     ProcessInfo{ExeName: "pypy3", CmdLine: "pypy3 server.py"},
-			wantLang: LangPython,
-			wantOK:   true,
+			name:   "pypy runtime",
+			proc:   ProcessInfo{ExeName: "pypy3", CmdLine: "pypy3 server.py"},
+			wantOK: true,
 		},
 		{
-			name:     ".py file in cmdline",
-			proc:     ProcessInfo{ExeName: "some-wrapper", CmdLine: "/usr/bin/env manage.py runserver"},
-			wantLang: LangPython,
-			wantOK:   true,
+			name:   ".py file in cmdline",
+			proc:   ProcessInfo{ExeName: "some-wrapper", CmdLine: "/usr/bin/env manage.py runserver"},
+			wantOK: true,
 		},
 		{
-			name:     "flask run pattern",
-			proc:     ProcessInfo{ExeName: "flask", CmdLine: "flask run --host=0.0.0.0"},
-			wantLang: LangPython,
-			wantOK:   true,
+			name:   "flask run pattern",
+			proc:   ProcessInfo{ExeName: "flask", CmdLine: "flask run --host=0.0.0.0"},
+			wantOK: true,
 		},
 		{
-			name:     "not python",
-			proc:     ProcessInfo{ExeName: "node", CmdLine: "node server.js"},
-			wantLang: "",
-			wantOK:   false,
+			name:   "not python",
+			proc:   ProcessInfo{ExeName: "node", CmdLine: "node server.js"},
+			wantOK: false,
 		},
 	}
 
-	inspector := &PythonInspector{}
+	handler := &PythonHandler{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			lang, ok := inspector.Inspect(&tt.proc)
+			ok := handler.Detect(&tt.proc)
 			if ok != tt.wantOK {
-				t.Errorf("Inspect() ok = %v, want %v", ok, tt.wantOK)
-			}
-			if lang != tt.wantLang {
-				t.Errorf("Inspect() lang = %q, want %q", lang, tt.wantLang)
+				t.Errorf("Detect() = %v, want %v", ok, tt.wantOK)
 			}
 		})
 	}
 }
 
-func TestLanguageRegistry_Detect(t *testing.T) {
-	registry := NewLanguageRegistry()
+func TestHandlerRegistry_Detect(t *testing.T) {
+	registry := NewHandlerRegistry()
 
 	tests := []struct {
 		name     string
@@ -239,15 +208,30 @@ func TestLanguageRegistry_Detect(t *testing.T) {
 	}
 }
 
-func TestLanguageRegistry_FirstMatchWins(t *testing.T) {
-	// Java inspector is registered first, so "java" should match as Java
-	// even though java could theoretically match something else
-	registry := NewLanguageRegistry()
+func TestHandlerRegistry_FirstMatchWins(t *testing.T) {
+	registry := NewHandlerRegistry()
 
 	proc := ProcessInfo{ExeName: "java", CmdLine: "java -jar app.jar"}
 	lang, ok := registry.Detect(&proc)
 	if !ok || lang != LangJava {
 		t.Errorf("expected Java (first-match-wins), got lang=%q ok=%v", lang, ok)
+	}
+}
+
+func TestHandlerRegistry_ForLanguage(t *testing.T) {
+	registry := NewHandlerRegistry()
+
+	if h := registry.ForLanguage(LangJava); h == nil {
+		t.Error("expected Java handler, got nil")
+	}
+	if h := registry.ForLanguage(LangNode); h == nil {
+		t.Error("expected Node handler, got nil")
+	}
+	if h := registry.ForLanguage(LangPython); h == nil {
+		t.Error("expected Python handler, got nil")
+	}
+	if h := registry.ForLanguage("rust"); h != nil {
+		t.Error("expected nil for unregistered language, got non-nil")
 	}
 }
 
