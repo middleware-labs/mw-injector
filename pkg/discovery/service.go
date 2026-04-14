@@ -1,3 +1,6 @@
+// service.go contains systemd-related helpers for the discovery package:
+// ignored unit lists, cgroup parsing for unit name extraction, and systemd
+// status checking.
 package discovery
 
 // ignoredSystemdUnits is the set of systemd unit names whose processes

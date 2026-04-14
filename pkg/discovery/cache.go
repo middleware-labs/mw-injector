@@ -1,3 +1,6 @@
+// cache.go provides a process metadata cache keyed by (PID, createTime) to
+// avoid re-reading /proc on every discovery cycle. Entries are pruned after
+// 20 minutes of staleness.
 package discovery
 
 import (
@@ -14,7 +17,7 @@ type ProcessCacheEntry struct {
 	HasAgent          bool
 	IsMiddlewareAgent bool
 	AgentPath         string
-	PythonAgentType   PythonAgentType
+	AgentType         string // "middleware", "opentelemetry", "otel-injector", etc.
 	Owner             string
 	ContainerInfo     *ContainerInfo
 	Ignore            bool
@@ -23,7 +26,7 @@ type ProcessCacheEntry struct {
 
 type ProcessMetadataCache struct {
 	data map[string]ProcessCacheEntry
-	mu   sync.RWMutex
+	mu   sync.Mutex
 }
 
 var (

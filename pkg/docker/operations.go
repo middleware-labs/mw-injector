@@ -1,3 +1,6 @@
+// Package docker provides container instrumentation operations: injecting
+// OTel environment variables into running Docker containers and tracking
+// instrumented state at /etc/middleware/docker/instrumented.json.
 package docker
 
 import (

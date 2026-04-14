@@ -1,3 +1,6 @@
+// types.go defines core types shared across the discovery package: the Language
+// enum used to classify processes, and the IntegrationInspector/IntegrationRegistry
+// for future host-level integration detection (e.g. Redis, Kafka).
 package discovery
 
 // Language represents a programming language detected in a process.
@@ -9,49 +12,10 @@ const (
 	LangPython Language = "python"
 )
 
-// --- Language Detection ---
-
-// LanguageInspector examines a ProcessInfo and returns the detected language.
-// Implementations must be safe for concurrent use.
-type LanguageInspector interface {
-	Inspect(proc *ProcessInfo) (Language, bool)
-}
-
-// LanguageRegistry iterates a list of inspectors in registration order.
-// The first match wins — this mirrors mw-lang-detector's DetectLanguage pattern.
-type LanguageRegistry struct {
-	inspectors []LanguageInspector
-}
-
-// NewLanguageRegistry returns a registry pre-loaded with the built-in
-// language inspectors. Order matters: Java is checked first because its
-// exe name ("java") is the most unambiguous.
-func NewLanguageRegistry() *LanguageRegistry {
-	return &LanguageRegistry{
-		inspectors: []LanguageInspector{
-			&JavaInspector{},
-			&NodeInspector{},
-			&PythonInspector{},
-		},
-	}
-}
-
-// Detect runs every registered inspector against proc and returns the
-// first matching language.
-func (r *LanguageRegistry) Detect(proc *ProcessInfo) (Language, bool) {
-	for _, i := range r.inspectors {
-		if lang, ok := i.Inspect(proc); ok {
-			return lang, true
-		}
-	}
-	return "", false
-}
-
 // --- Integration Detection (future use) ---
 
 // IntegrationDetails holds metadata about a detected integration
-// (e.g. Redis, Kafka) running on the host. Defined now so that
-// integration inspectors can plug in later without changing the interface.
+// (e.g. Redis, Kafka) running on the host.
 type IntegrationDetails struct {
 	Type    string
 	Version string

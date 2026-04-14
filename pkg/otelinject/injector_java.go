@@ -1,3 +1,7 @@
+// injector_java.go implements OtelInjector for Java processes. It discovers
+// running Java processes via the discovery package, validates that the Java
+// agent JAR and libotelinject.so are present, and instruments/uninstruments
+// them via systemd drop-in files.
 package otelinject
 
 import (
@@ -16,13 +20,13 @@ type JavaAgentStatus struct {
 }
 
 type JavaSystemdInjector struct {
-	JavaProcs []discovery.JavaProcess
+	JavaProcs []*discovery.Process
 	Status    JavaAgentStatus
 }
 
 func NewJavaSystemdInjector() (*JavaSystemdInjector, error) {
 	ctx := context.Background()
-	javaProcs, err := discovery.FindAllJavaProcesses(ctx)
+	javaProcs, err := discovery.FindProcessesByLanguage(ctx, discovery.LangJava)
 	if err != nil {
 		return nil, fmt.Errorf("error creating JavaSystemdInjector: %w", err)
 	}
@@ -48,7 +52,7 @@ func (j *JavaSystemdInjector) Instrument() error {
 		return errs
 	}
 	for _, proc := range j.JavaProcs {
-		isSystemd, unitName := discovery.CheckSystemdStatus(proc.ProcessPID)
+		isSystemd, unitName := discovery.CheckSystemdStatus(proc.PID)
 
 		if !isSystemd {
 			continue
@@ -60,7 +64,7 @@ func (j *JavaSystemdInjector) Instrument() error {
 				fmt.Errorf(
 					"could not create a new dropIn for %s and pid %d, %w",
 					unitName,
-					proc.ProcessPID,
+					proc.PID,
 					err,
 				),
 			)
@@ -73,7 +77,7 @@ func (j *JavaSystemdInjector) Instrument() error {
 				fmt.Errorf(
 					"could not apply dropIn for %s and pid %d, %w",
 					unitName,
-					proc.ProcessPID,
+					proc.PID,
 					err,
 				),
 			)
@@ -87,7 +91,7 @@ func (j *JavaSystemdInjector) Instrument() error {
 func (j *JavaSystemdInjector) Uninstrument() error {
 	var errs error
 	for _, proc := range j.JavaProcs {
-		isSystemd, unitName := discovery.CheckSystemdStatus(proc.ProcessPID)
+		isSystemd, unitName := discovery.CheckSystemdStatus(proc.PID)
 		if !isSystemd {
 			continue
 		}
@@ -95,7 +99,7 @@ func (j *JavaSystemdInjector) Uninstrument() error {
 		if err := removeSystemdDropIn(unitName); err != nil {
 			errs = errors.Join(
 				errs,
-				fmt.Errorf("could not remove dropIn for %s and pid %d, %w", unitName, proc.ProcessPID, err),
+				fmt.Errorf("could not remove dropIn for %s and pid %d, %w", unitName, proc.PID, err),
 			)
 		}
 	}
@@ -103,11 +107,11 @@ func (j *JavaSystemdInjector) Uninstrument() error {
 }
 
 func (j *JavaSystemdInjector) InstrumentService(service discovery.ServiceSetting) error {
-	javaProcToInstrument := j.getJavaProcToInstrument(service.PID)
-	if javaProcToInstrument == nil {
+	proc := j.getProcToInstrument(service.PID)
+	if proc == nil {
 		return fmt.Errorf("could not find java process: %v running on the host", service)
 	}
-	isSystemd, unitName := discovery.CheckSystemdStatus(javaProcToInstrument.ProcessPID)
+	isSystemd, unitName := discovery.CheckSystemdStatus(proc.PID)
 	if !isSystemd {
 		return fmt.Errorf("given java process is not a systemd process: %v", service)
 	}
@@ -127,10 +131,10 @@ func (j *JavaSystemdInjector) InstrumentService(service discovery.ServiceSetting
 	return nil
 }
 
-func (j *JavaSystemdInjector) getJavaProcToInstrument(pid int32) *discovery.JavaProcess {
+func (j *JavaSystemdInjector) getProcToInstrument(pid int32) *discovery.Process {
 	for _, proc := range j.JavaProcs {
-		if proc.ProcessPID == pid {
-			return &proc
+		if proc.PID == pid {
+			return proc
 		}
 	}
 	return nil

@@ -1,3 +1,6 @@
+// docker.go provides Docker-specific discovery by querying the Docker daemon
+// socket to list running containers and identify which ones run Java, Node,
+// or Python applications. Used for container-aware instrumentation reporting.
 package discovery
 
 import (

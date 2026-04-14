@@ -1,0 +1,473 @@
+// node_handler.go implements the LanguageHandler interface for Node.js processes.
+// It handles detection of Node/npm/yarn processes, enrichment with entry point,
+// package info, process manager details, and instrumentation state. Also contains
+// Node-specific helper functions for executable matching and agent detection.
+package discovery
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// NodeHandler implements LanguageHandler for Node.js processes.
+// It detects Node/npm/yarn processes, enriches them with entry point,
+// package info, process manager details, and instrumentation state.
+type NodeHandler struct{}
+
+// Lang returns LangNode.
+func (h *NodeHandler) Lang() Language { return LangNode }
+
+// Detect returns true if the process is a Node.js process, identified
+// by executable name (node, nodejs) or command patterns (npm, yarn, npx).
+func (h *NodeHandler) Detect(proc *ProcessInfo) bool {
+	exeLower := strings.ToLower(proc.ExeName)
+	if nodeExecutables[exeLower] {
+		return true
+	}
+
+	cmdLower := strings.ToLower(proc.CmdLine)
+	for _, pattern := range nodeCmdPatterns {
+		if strings.Contains(cmdLower, pattern) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// Enrich populates a Process struct with Node.js-specific details.
+// Returns nil if the process should be skipped.
+func (h *NodeHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector *ContainerDetector) *Process {
+	pid := info.PID
+	cmdArgs := info.CmdArgs
+
+	owner := readProcessOwner(pid)
+	createTime := readProcessCreateTime(pid)
+	alignedTime := (createTime / 1000) * 1000
+
+	// Cache fast path
+	if cached, hit := GetCachedProcessMetadata(pid, alignedTime); hit {
+		if cached.Ignore {
+			return nil
+		}
+
+		status := readProcessStatus(pid)
+
+		return &Process{
+			PID:            pid,
+			ParentPID:      readProcessPPID(pid),
+			ExecutableName: info.ExeName,
+			ExecutablePath: info.ExePath,
+			Command:        info.CmdLine,
+			CommandLine:    info.CmdLine,
+			Owner:          cached.Owner,
+			CreateTime:     timeFromMillis(createTime),
+			Status:         status,
+			Language:       LangNode,
+
+			ServiceName:        cached.ServiceName,
+			RuntimeName:        "node",
+			RuntimeVersion:     cached.RuntimeVersion,
+			RuntimeDescription: "Node.js Runtime",
+
+			HasAgent:          cached.HasAgent,
+			IsMiddlewareAgent: cached.IsMiddlewareAgent,
+			AgentPath:         cached.AgentPath,
+			ContainerInfo:     cached.ContainerInfo,
+
+			Details: map[string]any{
+				DetailEntryPoint:       cached.EntryPoint,
+				DetailProcessManager:   cached.ServiceType,
+				DetailIsPM2:            cached.ServiceType == "pm2",
+				DetailIsForever:        cached.ServiceType == "forever",
+			},
+		}
+	}
+
+	// Slow path
+	if isIgnoredSystemdUnit(pid) {
+		CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{Ignore: true})
+		return nil
+	}
+
+	status := readProcessStatus(pid)
+
+	proc := &Process{
+		PID:            pid,
+		ParentPID:      readProcessPPID(pid),
+		ExecutableName: info.ExeName,
+		ExecutablePath: info.ExePath,
+		Command:        info.CmdLine,
+		CommandLine:    info.CmdLine,
+		CommandArgs:    cmdArgs,
+		Owner:          owner,
+		CreateTime:     timeFromMillis(createTime),
+		Status:         status,
+		Language:       LangNode,
+
+		RuntimeName:        "node",
+		RuntimeVersion:     "unknown",
+		RuntimeDescription: "Node.js Runtime",
+
+		Details: make(map[string]any),
+	}
+
+	// Container detection
+	if opts.IncludeContainerInfo || opts.ExcludeContainers {
+		containerInfo, err := detector.IsProcessInContainer(pid)
+		if err == nil {
+			proc.ContainerInfo = containerInfo
+
+			if opts.ExcludeContainers && containerInfo.IsContainer {
+				return nil
+			}
+
+			if containerInfo.IsContainer && containerInfo.ContainerID != "" {
+				name := detector.GetContainerNameByID(containerInfo.ContainerID, containerInfo.Runtime)
+				if name != "" {
+					proc.ContainerInfo.ContainerName = strings.TrimPrefix(name, "/")
+				}
+			}
+		}
+	}
+
+	h.extractNodeInfo(proc, cmdArgs)
+	h.extractServiceName(proc, cmdArgs)
+	h.detectProcessManager(proc, cmdArgs)
+	h.detectInstrumentation(proc, cmdArgs)
+
+	// Populate cache
+	CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{
+		ServiceName:       proc.ServiceName,
+		ServiceType:       proc.DetailString(DetailProcessManager),
+		RuntimeVersion:    proc.RuntimeVersion,
+		EntryPoint:        proc.DetailString(DetailEntryPoint),
+		HasAgent:          proc.HasAgent,
+		IsMiddlewareAgent: proc.IsMiddlewareAgent,
+		AgentPath:         proc.AgentPath,
+		ContainerInfo:     proc.ContainerInfo,
+		Owner:             proc.Owner,
+	})
+
+	return proc
+}
+
+// PassesFilter checks simple owner-based filtering for Node processes.
+func (h *NodeHandler) PassesFilter(proc *Process, filter ProcessFilter) bool {
+	if filter.CurrentUserOnly {
+		return proc.Owner == currentUser()
+	}
+	return true
+}
+
+// ToServiceSetting converts a Node Process into a ServiceSetting for
+// backend reporting.
+func (h *NodeHandler) ToServiceSetting(proc *Process) *ServiceSetting {
+	key := fmt.Sprintf("host-node-%s", sanitize(proc.ServiceName))
+	isSystemd, unitname := CheckSystemdStatus(proc.PID)
+	serviceType := "system"
+	if isSystemd {
+		serviceType = "systemd"
+	}
+
+	serviceName := proc.ServiceName
+
+	// Handle Container Infrastructure
+	if proc.IsInContainer() {
+		serviceType = "docker"
+		if proc.ContainerInfo.ContainerID != "" {
+			key = fmt.Sprintf("docker-node-%s", proc.ContainerInfo.ContainerID[:12])
+			serviceName = proc.ContainerInfo.ContainerName
+		}
+	}
+
+	agentType := deriveAgentType(proc.HasAgent, proc.AgentPath, proc.IsMiddlewareAgent)
+
+	return &ServiceSetting{
+		PID:               proc.PID,
+		ServiceName:       serviceName,
+		Owner:             proc.Owner,
+		Status:            proc.Status,
+		Enabled:           true,
+		ServiceType:       serviceType,
+		Language:          "node",
+		RuntimeVersion:    proc.RuntimeVersion,
+		HasAgent:          proc.HasAgent,
+		IsMiddlewareAgent: proc.IsMiddlewareAgent,
+		AgentType:         agentType,
+		AgentPath:         proc.AgentPath,
+		Instrumented:      proc.HasAgent,
+		Key:               key,
+		SystemdUnit:       unitname,
+	}
+}
+
+// --- Private helpers ---
+
+func (h *NodeHandler) extractNodeInfo(proc *Process, cmdArgs []string) {
+	var entryPoint, workingDirectory string
+
+	if wd, err := os.Getwd(); err == nil {
+		workingDirectory = wd
+	}
+
+	for i, arg := range cmdArgs {
+		if i == 0 || strings.HasPrefix(arg, "-") {
+			continue
+		}
+
+		if strings.HasSuffix(arg, ".js") || strings.HasSuffix(arg, ".mjs") || strings.HasSuffix(arg, ".ts") {
+			entryPoint = arg
+
+			if !filepath.IsAbs(entryPoint) {
+				if absPath, err := filepath.Abs(entryPoint); err == nil {
+					workingDirectory = filepath.Dir(absPath)
+					entryPoint = filepath.Base(absPath)
+				}
+			} else {
+				workingDirectory = filepath.Dir(entryPoint)
+				entryPoint = filepath.Base(entryPoint)
+			}
+			break
+		}
+	}
+
+	proc.Details[DetailEntryPoint] = entryPoint
+	proc.Details[DetailWorkingDirectory] = workingDirectory
+
+	if workingDirectory != "" {
+		packageJsonPath := filepath.Join(workingDirectory, "package.json")
+		proc.Details[DetailPackageJsonPath] = packageJsonPath
+
+		if _, err := os.Stat(packageJsonPath); err == nil {
+			proc.Details[DetailPackageName] = "unknown"
+			proc.Details[DetailPackageVersion] = "unknown"
+		}
+	}
+}
+
+func (h *NodeHandler) extractServiceName(proc *Process, cmdArgs []string) {
+	if unitName := extractSystemdUnit(proc.PID); unitName != "" {
+		proc.ServiceName = cleanName(unitName)
+		return
+	}
+
+	if name := extractNodeServiceNameFromCmdArgs(cmdArgs); name != "" {
+		proc.ServiceName = name
+		return
+	}
+
+	pkgName := proc.DetailString(DetailPackageName)
+	if pkgName != "" && pkgName != "unknown" {
+		if name := cleanName(pkgName); name != "" {
+			proc.ServiceName = name
+			return
+		}
+	}
+
+	entryPoint := proc.DetailString(DetailEntryPoint)
+	if entryPoint != "" {
+		if name := extractNameFromNodeScript(entryPoint); name != "" {
+			proc.ServiceName = name
+			return
+		}
+	}
+
+	workDir := proc.DetailString(DetailWorkingDirectory)
+	if workDir != "" {
+		if name := extractNameFromDir(workDir); name != "" {
+			proc.ServiceName = name
+			return
+		}
+	}
+
+	proc.ServiceName = "node-service"
+}
+
+func (h *NodeHandler) detectProcessManager(proc *Process, cmdArgs []string) {
+	cmdline := strings.ToLower(strings.Join(cmdArgs, " "))
+
+	if strings.Contains(cmdline, "pm2") || strings.Contains(cmdline, "/pm2/") {
+		proc.Details[DetailIsPM2] = true
+		proc.Details[DetailProcessManager] = "pm2"
+
+		for _, arg := range cmdArgs {
+			if strings.HasPrefix(arg, "--name=") {
+				proc.Details[DetailPM2Name] = strings.TrimPrefix(arg, "--name=")
+				break
+			}
+		}
+	}
+
+	if strings.Contains(cmdline, "forever") || strings.Contains(cmdline, "/forever/") {
+		proc.Details[DetailIsForever] = true
+		proc.Details[DetailProcessManager] = "forever"
+	}
+
+	if proc.DetailString(DetailProcessManager) == "" && proc.Owner != "root" && proc.Owner != "node" {
+		proc.Details[DetailProcessManager] = "systemd"
+	}
+}
+
+func (h *NodeHandler) detectInstrumentation(proc *Process, cmdArgs []string) {
+	cmdline := strings.Join(cmdArgs, " ")
+
+	if h.detectAgentInCmdline(proc, cmdline) {
+		return
+	}
+
+	h.checkEnvForAgent(proc)
+}
+
+func (h *NodeHandler) detectAgentInCmdline(proc *Process, cmdline string) bool {
+	agentPatterns := []string{"--require ", "-r ", "--import ", "--loader "}
+
+	cmdlineLower := strings.ToLower(cmdline)
+	for _, pattern := range agentPatterns {
+		if strings.Contains(cmdlineLower, pattern) {
+			agentPath := extractNodeAgentPathFromCmdline(cmdline, pattern)
+			if agentPath != "" {
+				h.setAgentInfo(proc, agentPath)
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (h *NodeHandler) checkEnvForAgent(proc *Process) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", proc.PID))
+	if err != nil {
+		return
+	}
+
+	envVars := strings.Split(string(data), "\x00")
+	for _, env := range envVars {
+		if strings.HasPrefix(env, "NODE_OPTIONS=") {
+			value := strings.TrimPrefix(env, "NODE_OPTIONS=")
+			if agentPath := extractNodeAgentFromEnvValue(value); agentPath != "" {
+				h.setAgentInfo(proc, agentPath)
+				return
+			}
+		}
+
+		if strings.HasPrefix(env, "LD_PRELOAD=") {
+			value := strings.TrimPrefix(env, "LD_PRELOAD=")
+			if path := extractLibOtelInjectPath(value); path != "" {
+				proc.HasAgent = true
+				proc.IsMiddlewareAgent = false
+				proc.AgentPath = path
+				proc.AgentType = "opentelemetry"
+				return
+			}
+		}
+	}
+}
+
+func (h *NodeHandler) setAgentInfo(proc *Process, agentPath string) {
+	proc.HasAgent = true
+	proc.AgentPath = agentPath
+
+	mwPatterns := []string{"middleware", "mw-", "mw.js", "middleware-agent", "mw-register"}
+	lower := strings.ToLower(agentPath)
+	for _, p := range mwPatterns {
+		if strings.Contains(lower, p) {
+			proc.IsMiddlewareAgent = true
+			proc.AgentType = "middleware"
+			return
+		}
+	}
+	proc.AgentType = "opentelemetry"
+}
+
+// --- Node.js-specific lookup tables and helpers ---
+
+// nodeExecutables lists executable names that identify a Node.js process.
+var nodeExecutables = map[string]bool{
+	"node":   true,
+	"nodejs": true,
+}
+
+// nodeCmdPatterns lists command line patterns that indicate a Node.js process.
+var nodeCmdPatterns = []string{
+	"node ",
+	"npm start",
+	"npm run",
+	"npx ",
+	"yarn start",
+	"yarn run",
+}
+
+// extractNodeServiceNameFromCmdArgs extracts a service name from Node.js
+// command arguments by looking for --name=, --service=, or SERVICE_NAME= flags.
+func extractNodeServiceNameFromCmdArgs(cmdArgs []string) string {
+	serviceProperties := []string{"--name=", "--service=", "SERVICE_NAME=", "NODE_ENV="}
+
+	for _, arg := range cmdArgs {
+		for _, prop := range serviceProperties {
+			if strings.Contains(arg, prop) {
+				name := strings.TrimPrefix(arg, prop)
+				name = strings.Trim(name, `"'`)
+				if name != "" && name != "production" && name != "development" {
+					return cleanName(name)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// extractNameFromNodeScript derives a service name from a Node script filename,
+// filtering out generic names like index.js, app.js, server.js.
+func extractNameFromNodeScript(scriptName string) string {
+	if scriptName == "" {
+		return ""
+	}
+
+	baseName := strings.TrimSuffix(scriptName, filepath.Ext(scriptName))
+	baseName = filepath.Base(baseName)
+
+	genericNodeNames := map[string]bool{
+		"index": true, "app": true, "main": true, "server": true, "start": true, "run": true,
+		"node": true, "npm": true, "yarn": true, "nodemon": true, "pm2": true, "forever": true,
+	}
+
+	if genericNodeNames[strings.ToLower(baseName)] {
+		return ""
+	}
+
+	return cleanName(baseName)
+}
+
+// extractNodeAgentPathFromCmdline extracts the path following an agent flag
+// (e.g. --require, -r) in the command line.
+func extractNodeAgentPathFromCmdline(cmdline, pattern string) string {
+	idx := strings.Index(strings.ToLower(cmdline), pattern)
+	if idx == -1 {
+		return ""
+	}
+
+	agentPart := cmdline[idx+len(pattern):]
+	if spaceIdx := strings.Index(agentPart, " "); spaceIdx != -1 {
+		agentPart = agentPart[:spaceIdx]
+	}
+	return strings.TrimSpace(agentPart)
+}
+
+// extractNodeAgentFromEnvValue extracts an agent path from NODE_OPTIONS
+// by looking for --require, -r, --import, or --loader flags.
+func extractNodeAgentFromEnvValue(envValue string) string {
+	agentPatterns := []string{"--require ", "-r ", "--import ", "--loader "}
+	for _, pattern := range agentPatterns {
+		if idx := strings.Index(envValue, pattern); idx != -1 {
+			agentPart := envValue[idx+len(pattern):]
+			if spaceIdx := strings.Index(agentPart, " "); spaceIdx != -1 {
+				agentPart = agentPart[:spaceIdx]
+			}
+			return agentPart
+		}
+	}
+	return ""
+}
