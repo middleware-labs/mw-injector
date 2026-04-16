@@ -201,6 +201,7 @@ func (h *NodeHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 		Instrumented:      proc.HasAgent,
 		Key:               key,
 		SystemdUnit:       unitname,
+		Listeners:         proc.Listeners(),
 	}
 }
 

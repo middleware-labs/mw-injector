@@ -33,6 +33,7 @@ type ServiceSetting struct {
 	Key               string `json:"key"`
 	InstrumentThis    bool   `json:"instrument_this"` // I want this to default to false.
 	ProcessManager    string `json:"process_manager,omitempty"`
+	Listeners         []Listener `json:"listeners,omitempty"`
 }
 
 // OSConfig represents the configuration and status for a specific OS (e.g., "linux").

@@ -200,6 +200,12 @@ func (d *discoverer) enrichWithWorkerPool(ctx context.Context, infos []ProcessIn
 		}
 	}
 
+	// Attach listening-port info as a post-enrichment batch. Grouping by
+	// netns lets us read /proc/<pid>/net/* once per unique namespace instead
+	// of once per PID — a big win on container hosts where many processes
+	// share the host netns.
+	AttachListeners(processes)
+
 	return processes, nil
 }
 

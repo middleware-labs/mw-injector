@@ -37,6 +37,7 @@ const (
 
 	// Common detail keys shared across languages
 	DetailProcessManager = "process_manager"
+	DetailListeners      = "listeners" // []Listener — TCP/UDP sockets the process is listening on
 )
 
 // Process represents a discovered process of any supported language.
@@ -136,6 +137,19 @@ func (p *Process) DetailBool(key string) bool {
 	v, ok := p.Details[key].(bool)
 	if !ok {
 		return false
+	}
+	return v
+}
+
+// Listeners returns the TCP/UDP listening sockets detected for this process,
+// or nil if none were found or detection was skipped.
+func (p *Process) Listeners() []Listener {
+	if p.Details == nil {
+		return nil
+	}
+	v, ok := p.Details[DetailListeners].([]Listener)
+	if !ok {
+		return nil
 	}
 	return v
 }
