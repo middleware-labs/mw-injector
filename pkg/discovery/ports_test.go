@@ -1,10 +1,41 @@
 package discovery
 
 import (
+	"bytes"
+	"context"
+	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"testing"
 )
+
+// TestDiscoveryLoggerEmitsTimings confirms that when a slog logger is
+// passed via DiscoveryOptions, discovery emits structured timing records.
+// Nil-logger callers should see no output and no panic.
+func TestDiscoveryLoggerEmitsTimings(t *testing.T) {
+	// Nil-logger path: must not panic.
+	_, err := FindAllProcesses(context.Background())
+	if err != nil {
+		t.Fatalf("nil-logger path errored: %v", err)
+	}
+
+	// Real logger: capture output.
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	_, err = FindAllProcessesWithLogger(context.Background(), logger)
+	if err != nil {
+		t.Fatalf("logger path errored: %v", err)
+	}
+
+	out := buf.String()
+	for _, want := range []string{"classification complete", "discovery complete"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected log output to contain %q, got: %s", want, out)
+		}
+	}
+}
 
 func TestParseHexAddrPort(t *testing.T) {
 	tests := []struct {

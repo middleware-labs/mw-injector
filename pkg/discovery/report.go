@@ -6,6 +6,7 @@ package discovery
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"runtime"
 	"strings"
@@ -49,11 +50,21 @@ type AgentReportValue map[string]OSConfig
 // GetAgentReportValue discovers all processes and converts them to an
 // AgentReportValue for backend reporting. Uses the handler registry to
 // loop over all supported languages.
+//
+// Use GetAgentReportValueWithLogger to receive structured timing logs.
 func GetAgentReportValue() (AgentReportValue, error) {
+	return GetAgentReportValueWithLogger(nil)
+}
+
+// GetAgentReportValueWithLogger is like GetAgentReportValue but emits
+// structured timing/diagnostic logs via the supplied slog logger. A nil
+// logger disables logging.
+func GetAgentReportValueWithLogger(logger *slog.Logger) (AgentReportValue, error) {
 	ctx := context.Background()
 	opts := DefaultDiscoveryOptions()
 	opts.ExcludeContainers = false
 	opts.IncludeContainerInfo = true
+	opts.Logger = logger
 
 	d, err := NewDiscovererWithOptions(ctx, opts)
 	if err != nil {

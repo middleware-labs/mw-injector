@@ -3,6 +3,7 @@ package reporter
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"net/url"
 	"runtime"
 
@@ -40,7 +41,14 @@ func New(hostname, apiKey, urlForConfigCheck, version, infraPlatform string) (*R
 // Sync discovers all running processes, preserves user-configured instrument_this
 // flags fetched from the backend, and sends the merged snapshot.
 func (r *Reporter) Sync() error {
-	snapshot, err := discovery.GetAgentReportValue()
+	return r.SyncWithLogger(nil)
+}
+
+// SyncWithLogger is like Sync but threads an optional slog logger through
+// the discovery pipeline so timing records are emitted. A nil logger
+// disables discovery-level logging.
+func (r *Reporter) SyncWithLogger(logger *slog.Logger) error {
+	snapshot, err := discovery.GetAgentReportValueWithLogger(logger)
 	if err != nil {
 		return fmt.Errorf("failed to build host snapshot: %w", err)
 	}

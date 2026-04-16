@@ -14,6 +14,8 @@ package discovery
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -26,7 +28,17 @@ type DiscoveryOptions struct {
 	Filter               ProcessFilter `json:"filter"`
 	ExcludeContainers    bool          `json:"exclude_containers"`
 	IncludeContainerInfo bool          `json:"include_container_info"`
+
+	// Logger is an optional structured logger for discovery-phase timing
+	// and diagnostics. Nil means no logs. Callers with a zap logger can
+	// bridge via `slog.New(zapslog.NewHandler(zapCore, nil))`.
+	Logger *slog.Logger `json:"-"`
 }
+
+// discardLogger is returned by discoverer.logger() when no logger is set
+// so call sites can unconditionally call d.logger().Debug(...) without
+// nil checks. Writing to io.Discard is the cheapest available sink.
+var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 // ProcessFilter defines filtering criteria for process discovery.
 type ProcessFilter struct {
@@ -117,18 +129,41 @@ func (d *discoverer) Close() error {
 	return nil
 }
 
+// logger returns the caller-supplied slog logger or a discard logger if
+// none was provided. Always safe to call; never returns nil.
+func (d *discoverer) logger() *slog.Logger {
+	if d.opts.Logger == nil {
+		return discardLogger
+	}
+	return d.opts.Logger
+}
+
 // --- Single-pass classification ---
 
 // classifyAll runs every scanned process through the handler registry and
 // returns them grouped by language. The first handler whose Detect returns
 // true wins (same as mw-lang-detector's DetectLanguage pattern).
 func (d *discoverer) classifyAll() map[Language][]ProcessInfo {
+	start := time.Now()
 	grouped := make(map[Language][]ProcessInfo)
 	for i := range d.allProcesses {
 		if lang, ok := d.handlerRegistry.Detect(&d.allProcesses[i]); ok {
 			grouped[lang] = append(grouped[lang], d.allProcesses[i])
 		}
 	}
+
+	// Build per-language counts for the log record. Zero-count languages
+	// are omitted to keep output tidy.
+	counts := make([]any, 0, 2+2*len(grouped))
+	counts = append(counts,
+		"scanned_pids", len(d.allProcesses),
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+	for lang, infos := range grouped {
+		counts = append(counts, string(lang)+"_count", len(infos))
+	}
+	d.logger().Debug("classification complete", counts...)
+
 	return grouped
 }
 
@@ -140,6 +175,9 @@ func (d *discoverer) enrichWithWorkerPool(ctx context.Context, infos []ProcessIn
 	if len(infos) == 0 {
 		return []*Process{}, nil
 	}
+
+	lang := string(handler.Lang())
+	enrichStart := time.Now()
 
 	type result struct {
 		proc *Process
@@ -200,11 +238,24 @@ func (d *discoverer) enrichWithWorkerPool(ctx context.Context, infos []ProcessIn
 		}
 	}
 
+	enrichDuration := time.Since(enrichStart)
+
 	// Attach listening-port info as a post-enrichment batch. Grouping by
 	// netns lets us read /proc/<pid>/net/* once per unique namespace instead
 	// of once per PID — a big win on container hosts where many processes
 	// share the host netns.
+	portsStart := time.Now()
 	AttachListeners(processes)
+	portsDuration := time.Since(portsStart)
+
+	d.logger().Debug("enrichment complete",
+		"language", lang,
+		"classified_count", len(infos),
+		"filtered_count", len(processes),
+		"enrich_ms", enrichDuration.Milliseconds(),
+		"ports_ms", portsDuration.Milliseconds(),
+		"workers", numWorkers,
+	)
 
 	return processes, nil
 }
@@ -221,6 +272,7 @@ func (d *discoverer) DiscoverAll(ctx context.Context) (map[Language][]*Process, 
 		defer cancel()
 	}
 
+	overallStart := time.Now()
 	grouped := d.classifyAll()
 	result := make(map[Language][]*Process)
 
@@ -237,6 +289,16 @@ func (d *discoverer) DiscoverAll(ctx context.Context) (map[Language][]*Process, 
 		}
 		result[lang] = procs
 	}
+
+	total := 0
+	for _, procs := range result {
+		total += len(procs)
+	}
+	d.logger().Info("discovery complete",
+		"duration_ms", time.Since(overallStart).Milliseconds(),
+		"total_processes", total,
+		"languages", len(result),
+	)
 
 	return result, nil
 }
@@ -263,10 +325,19 @@ func (d *discoverer) DiscoverByLanguage(ctx context.Context, lang Language) ([]*
 // --- Public convenience functions ---
 
 // FindAllProcesses discovers all supported language processes, grouped by language.
+// Use FindAllProcessesWithLogger to receive structured timing logs.
 func FindAllProcesses(ctx context.Context) (map[Language][]*Process, error) {
+	return FindAllProcessesWithLogger(ctx, nil)
+}
+
+// FindAllProcessesWithLogger is like FindAllProcesses but emits structured
+// timing/diagnostic logs via the supplied slog logger. A nil logger disables
+// logging (equivalent to FindAllProcesses).
+func FindAllProcessesWithLogger(ctx context.Context, logger *slog.Logger) (map[Language][]*Process, error) {
 	opts := DefaultDiscoveryOptions()
 	opts.ExcludeContainers = false
 	opts.IncludeContainerInfo = true
+	opts.Logger = logger
 
 	d, err := NewDiscovererWithOptions(ctx, opts)
 	if err != nil {
@@ -278,10 +349,19 @@ func FindAllProcesses(ctx context.Context) (map[Language][]*Process, error) {
 }
 
 // FindProcessesByLanguage discovers processes for a specific language.
+// Use FindProcessesByLanguageWithLogger to receive structured timing logs.
 func FindProcessesByLanguage(ctx context.Context, lang Language) ([]*Process, error) {
+	return FindProcessesByLanguageWithLogger(ctx, lang, nil)
+}
+
+// FindProcessesByLanguageWithLogger is like FindProcessesByLanguage but
+// emits structured timing/diagnostic logs via the supplied slog logger.
+// A nil logger disables logging.
+func FindProcessesByLanguageWithLogger(ctx context.Context, lang Language, logger *slog.Logger) ([]*Process, error) {
 	opts := DefaultDiscoveryOptions()
 	opts.ExcludeContainers = false
 	opts.IncludeContainerInfo = true
+	opts.Logger = logger
 
 	d, err := NewDiscovererWithOptions(ctx, opts)
 	if err != nil {

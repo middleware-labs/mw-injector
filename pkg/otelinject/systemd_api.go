@@ -6,6 +6,7 @@ package otelinject
 
 import (
 	"fmt"
+	"log/slog"
 	"runtime"
 
 	"github.com/middleware-labs/java-injector/pkg/discovery"
@@ -19,11 +20,25 @@ func ReportStatus(
 	version string,
 	infraPlatform string,
 ) error {
+	return ReportStatusWithLogger(hostname, apiKey, urlForConfigCheck, version, infraPlatform, nil)
+}
+
+// ReportStatusWithLogger is like ReportStatus but threads an optional slog
+// logger through the discovery pipeline so timing records are emitted.
+// A nil logger disables logging.
+func ReportStatusWithLogger(
+	hostname string,
+	apiKey string,
+	urlForConfigCheck string,
+	version string,
+	infraPlatform string,
+	logger *slog.Logger,
+) error {
 	r, err := reporter.New(hostname, apiKey, urlForConfigCheck, version, infraPlatform)
 	if err != nil {
 		return err
 	}
-	return r.Sync()
+	return r.SyncWithLogger(logger)
 }
 
 func InstrumentUnit(unitName string, lang Language) error {
@@ -74,7 +89,14 @@ type ServiceInfo struct {
 // (e.g. Java found but Python failed) — valid results are returned alongside
 // any non-nil error.
 func ListSystemdServices() ([]ServiceInfo, error) {
-	rawReportValue, err := discovery.GetAgentReportValue()
+	return ListSystemdServicesWithLogger(nil)
+}
+
+// ListSystemdServicesWithLogger is like ListSystemdServices but threads an
+// optional slog logger through the discovery pipeline so timing records are
+// emitted. A nil logger disables logging.
+func ListSystemdServicesWithLogger(logger *slog.Logger) ([]ServiceInfo, error) {
+	rawReportValue, err := discovery.GetAgentReportValueWithLogger(logger)
 
 	osConfig, ok := rawReportValue[runtime.GOOS]
 	if !ok {
