@@ -170,7 +170,7 @@ func (h *NodeHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 	// Handle Container Infrastructure
 	if proc.IsInContainer() {
 		serviceType = "docker"
-		if proc.ContainerInfo.ContainerID != "" {
+		if proc.ContainerInfo.ContainerID != "" && len(proc.ContainerInfo.ContainerID) >= 12 {
 			key = fmt.Sprintf("docker-node-%s", proc.ContainerInfo.ContainerID[:12])
 			serviceName = proc.ContainerInfo.ContainerName
 		}

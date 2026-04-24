@@ -197,8 +197,11 @@ func (cd *ContainerDetector) checkCgroup(pid int32) (*ContainerInfo, error) {
 	}
 
 	// 5. GENERIC FALLBACK (Systemd Scopes)
-	// If it's in a .scope but not the init.scope or user.slice, it's likely a container
-	if strings.Contains(content, ".scope") && !strings.Contains(content, "init.scope") {
+	// If it's in a .scope but not init.scope or user.slice, it's likely a container.
+	// user.slice scopes are regular desktop/terminal apps, not containers.
+	if strings.Contains(content, ".scope") &&
+		!strings.Contains(content, "init.scope") &&
+		!strings.Contains(content, "user.slice") {
 		return &ContainerInfo{
 			IsContainer: true,
 			Runtime:     "generic-container",
