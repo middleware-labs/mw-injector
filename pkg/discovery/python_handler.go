@@ -184,6 +184,9 @@ func (h *PythonHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 
 	if proc.IsInContainer() {
 		serviceType = "docker"
+		if proc.ContainerInfo.ContainerID != "" && len(proc.ContainerInfo.ContainerID) >= 12 {
+			key = fmt.Sprintf("docker-python-%s", proc.ContainerInfo.ContainerID[:12])
+		}
 	} else if proc.DetailBool(DetailIsCelery) {
 		serviceType = "worker"
 	}

@@ -14,29 +14,29 @@ import (
 
 // ServiceSetting represents the detailed status for a single service/process.
 type ServiceSetting struct {
-	PID               int32  `json:"pid"`
-	ServiceName       string `json:"service_name"`
-	Owner             string `json:"owner"`
-	Status            string `json:"status"`
-	Enabled           bool   `json:"enabled"`
-	ServiceType       string `json:"service_type"`
-	Language          string `json:"language"`
-	RuntimeVersion    string `json:"runtime_version"`
-	SystemdUnit       string `json:"systemd_unit,omitempty"`
-	JarFile           string `json:"jar_file,omitempty"`
-	MainClass         string `json:"main_class,omitempty"`
-	HasAgent          bool   `json:"has_agent"`
-	IsMiddlewareAgent bool   `json:"is_middleware_agent"`
-	AgentType         string `json:"agent_type,omitempty"`
-	AgentPath         string `json:"agent_path,omitempty"`
-	ConfigPath        string `json:"config_path,omitempty"`
-	Instrumented      bool   `json:"instrumented"`
-	Key               string `json:"key"`
-	InstrumentThis      bool   `json:"instrument_this"` // I want this to default to false.
-	ProcessManager      string `json:"process_manager,omitempty"`
+	PID                 int32      `json:"pid"`
+	ServiceName         string     `json:"service_name"`
+	Owner               string     `json:"owner"`
+	Status              string     `json:"status"`
+	Enabled             bool       `json:"enabled"`
+	ServiceType         string     `json:"service_type"`
+	Language            string     `json:"language"`
+	RuntimeVersion      string     `json:"runtime_version"`
+	SystemdUnit         string     `json:"systemd_unit,omitempty"`
+	JarFile             string     `json:"jar_file,omitempty"`
+	MainClass           string     `json:"main_class,omitempty"`
+	HasAgent            bool       `json:"has_agent"`
+	IsMiddlewareAgent   bool       `json:"is_middleware_agent"`
+	AgentType           string     `json:"agent_type,omitempty"`
+	AgentPath           string     `json:"agent_path,omitempty"`
+	ConfigPath          string     `json:"config_path,omitempty"`
+	Instrumented        bool       `json:"instrumented"`
+	Key                 string     `json:"key"`
+	InstrumentThis      bool       `json:"instrument_this"` // I want this to default to false.
+	ProcessManager      string     `json:"process_manager,omitempty"`
 	Listeners           []Listener `json:"listeners,omitempty"`
-	InstrumentationType string `json:"instrumentation_type,omitempty"`
-	Fingerprint         string `json:"fingerprint,omitempty"`
+	InstrumentationType string     `json:"instrumentation_type,omitempty"`
+	Fingerprint         string     `json:"fingerprint,omitempty"`
 }
 
 // OSConfig represents the configuration and status for a specific OS (e.g., "linux").

@@ -156,6 +156,9 @@ func (h *JavaHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 	deploymentType := "standalone"
 	if proc.IsInContainer() {
 		deploymentType = "docker"
+		if proc.ContainerInfo.ContainerID != "" && len(proc.ContainerInfo.ContainerID) >= 12 {
+			key = fmt.Sprintf("docker-java-%s", proc.ContainerInfo.ContainerID[:12])
+		}
 	} else if isSystemd {
 		deploymentType = "systemd"
 	}
