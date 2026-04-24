@@ -75,7 +75,7 @@ func readProcDetails(pid int32) (ProcessInfo, bool) {
 	// /proc/<pid>/cmdline uses null bytes as separators.
 	// Build both a space-joined string and an arg slice.
 	var args []string
-	for _, seg := range strings.Split(string(cmdlineRaw), "\x00") {
+	for seg := range strings.SplitSeq(string(cmdlineRaw), "\x00") {
 		if seg != "" {
 			args = append(args, seg)
 		}

@@ -131,13 +131,6 @@ func (h *PythonHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detecto
 		containerInfo, err := detector.IsProcessInContainer(pid)
 		if err == nil && containerInfo.IsContainer {
 			proc.ContainerInfo = containerInfo
-
-			if containerInfo.ContainerName == "" && containerInfo.ContainerID != "" {
-				name := detector.GetContainerNameByID(containerInfo.ContainerID, containerInfo.Runtime)
-				if name != "" {
-					proc.ContainerInfo.ContainerName = strings.TrimPrefix(name, "/")
-				}
-			}
 		}
 	}
 

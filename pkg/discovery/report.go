@@ -32,9 +32,11 @@ type ServiceSetting struct {
 	ConfigPath        string `json:"config_path,omitempty"`
 	Instrumented      bool   `json:"instrumented"`
 	Key               string `json:"key"`
-	InstrumentThis    bool   `json:"instrument_this"` // I want this to default to false.
-	ProcessManager    string `json:"process_manager,omitempty"`
-	Listeners         []Listener `json:"listeners,omitempty"`
+	InstrumentThis      bool   `json:"instrument_this"` // I want this to default to false.
+	ProcessManager      string `json:"process_manager,omitempty"`
+	Listeners           []Listener `json:"listeners,omitempty"`
+	InstrumentationType string `json:"instrumentation_type,omitempty"`
+	Fingerprint         string `json:"fingerprint,omitempty"`
 }
 
 // OSConfig represents the configuration and status for a specific OS (e.g., "linux").

@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"runtime"
 
-	"github.com/k0kubun/pp"
 	"github.com/middleware-labs/java-injector/pkg/discovery"
 )
 
@@ -73,8 +72,6 @@ func (r *Reporter) SyncWithLogger(logger *slog.Logger) error {
 			}
 		}
 	}
-
-	pp.Println(snapshot)
 
 	if err := r.client.Send(snapshot); err != nil {
 		return fmt.Errorf("failed to send report: %w", err)

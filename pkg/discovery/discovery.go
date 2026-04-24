@@ -98,6 +98,7 @@ type discoverer struct {
 	ctx               context.Context
 	opts              DiscoveryOptions
 	containerDetector *ContainerDetector
+	containerClients  []ContainerClient
 	handlerRegistry   *HandlerRegistry
 	allProcesses      []ProcessInfo // scanned once via ScanProcesses()
 }
@@ -120,6 +121,7 @@ func NewDiscovererWithOptions(ctx context.Context, opts DiscoveryOptions) (*disc
 		ctx:               ctx,
 		opts:              opts,
 		containerDetector: NewContainerDetector(),
+		containerClients:  initContainerClients(ctx),
 		handlerRegistry:   NewHandlerRegistry(),
 		allProcesses:      allProcs,
 	}, nil
@@ -248,12 +250,25 @@ func (d *discoverer) enrichWithWorkerPool(ctx context.Context, infos []ProcessIn
 	AttachListeners(processes)
 	portsDuration := time.Since(portsStart)
 
+	// Batch-resolve container names via runtime API instead of per-process
+	// CLI calls. Uses the global name cache to avoid redundant lookups.
+	containerStart := time.Now()
+	batchResolveContainerNames(ctx, processes, d.containerClients)
+
+	// Container names were not yet available when extractServiceName ran
+	// during enrichment. For container processes that now have a resolved
+	// name, promote it to ServiceName if no higher-priority source
+	// (like OTEL_SERVICE_NAME) already set it.
+	applyContainerServiceNames(processes)
+	containerDuration := time.Since(containerStart)
+
 	d.logger().Debug("enrichment complete",
 		"language", lang,
 		"classified_count", len(infos),
 		"filtered_count", len(processes),
 		"enrich_ms", enrichDuration.Milliseconds(),
 		"ports_ms", portsDuration.Milliseconds(),
+		"container_ms", containerDuration.Milliseconds(),
 		"workers", numWorkers,
 	)
 

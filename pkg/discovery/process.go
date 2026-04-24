@@ -3,7 +3,14 @@
 // semantic conventions; language-specific metadata lives in the Details map.
 package discovery
 
-import "time"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+)
 
 // Detail key constants for language-specific metadata stored in Process.Details.
 // Each language handler populates the keys relevant to its language.
@@ -115,6 +122,41 @@ func (p *Process) GetContainerName() string {
 		return p.ContainerInfo.ContainerName
 	}
 	return ""
+}
+
+// Fingerprint returns a stable identity hash for this process that survives
+// PID rotation. It combines the executable path with language-specific stable
+// identifiers (jar file, main class, entry point, module path) and listen
+// ports, so two instances of the same app on different ports get distinct
+// fingerprints.
+func (p *Process) Fingerprint() string {
+	parts := []string{p.ExecutablePath}
+
+	switch p.Language {
+	case LangJava:
+		if jar := p.DetailString(DetailJarFile); jar != "" {
+			parts = append(parts, jar)
+		}
+		if mc := p.DetailString(DetailMainClass); mc != "" {
+			parts = append(parts, mc)
+		}
+	case LangNode:
+		if ep := p.DetailString(DetailEntryPoint); ep != "" {
+			parts = append(parts, ep)
+		}
+	case LangPython:
+		if mp := p.DetailString(DetailModulePath); mp != "" {
+			parts = append(parts, mp)
+		}
+	}
+
+	for _, l := range p.Listeners() {
+		parts = append(parts, fmt.Sprintf("%s:%d", l.Protocol, l.Port))
+	}
+
+	sort.Strings(parts[1:])
+	h := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(h[:8])
 }
 
 // DetailString returns the string value for a detail key, or "" if missing or wrong type.

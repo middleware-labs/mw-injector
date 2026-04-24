@@ -93,13 +93,6 @@ func (h *JavaHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 			if opts.ExcludeContainers && containerInfo.IsContainer {
 				return nil
 			}
-
-			if containerInfo.IsContainer && containerInfo.ContainerID != "" {
-				name := detector.GetContainerNameByID(containerInfo.ContainerID, containerInfo.Runtime)
-				if name != "" {
-					proc.ContainerInfo.ContainerName = strings.TrimPrefix(name, "/")
-				}
-			}
 		}
 	}
 
