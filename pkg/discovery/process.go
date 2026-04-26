@@ -6,7 +6,6 @@ package discovery
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -148,10 +147,6 @@ func (p *Process) Fingerprint() string {
 		if mp := p.DetailString(DetailModulePath); mp != "" {
 			parts = append(parts, mp)
 		}
-	}
-
-	for _, l := range p.Listeners() {
-		parts = append(parts, fmt.Sprintf("%s:%d", l.Protocol, l.Port))
 	}
 
 	sort.Strings(parts[1:])

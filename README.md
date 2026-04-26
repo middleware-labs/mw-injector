@@ -1,180 +1,106 @@
-# MW Injector 🚀
+# MW Injector
 
-**Zero-configuration Java application instrumentation that actually works.**
+Go library for process discovery and auto-instrumentation on Linux hosts. Discovers Java, Node.js, and Python applications across host processes, Docker/Podman containers, and systemd services, then instruments them via systemd drop-ins or OBI (OpenTelemetry eBPF Instrumentation).
 
-MW Injector automatically discovers, instruments, and manages Java applications across your entire infrastructure with a single command.
+Used as a library by [mw-agent](https://github.com/middleware-labs/mw-agent) — not a standalone CLI.
 
-## ⚡ Quick Start
-
-```bash
-# List all Java processes
-sudo mw-injector list-all
-
-# Auto-instrument everything (host processes)
-sudo mw-injector auto-instrument
-
-# Auto-instrument Docker containers
-sudo mw-injector instrument-docker
-
-# List instrumented containers
-sudo mw-injector list-docker
-```
-
-# Config-based mode (no prompts, uses saved config)
-```
-sudo mw-injector auto-instrument-config
-```
-
-# Auto-instrument Docker containers
-```
-sudo mw-injector instrument-docker-config
-```
-## 🔧 Configuration File
-
-Create a config file to avoid repetitive API key prompts and enable fully automated instrumentation:
-```bash
-# Create system-wide config
-sudo tee /etc/mw-injector.conf << EOF
-MW_API_KEY=your_middleware_api_key_here
-MW_TARGET=https://prod.middleware.io:443
-MW_JAVA_AGENT_PATH=/opt/middleware/agents/middleware-javaagent-1.8.1.jar
-EOF
-```
-
-That's it. Your Java apps are now sending telemetry data to Middleware.io.
-
-## 🎯 What Makes This Different
-
-- **Auto-Discovery**: Finds Java processes everywhere - host, Docker, Docker Compose, systemd services
-- **Zero Configuration**: No manual agent setup, no classpath hell, no environment variable gymnastics
-- **Intelligent Detection**: Recognizes Tomcat instances, Spring Boot apps, JAR files, and service types
-- **Permission-Aware**: Handles user contexts, systemd security, and file access automatically
-- **Reversible**: Clean uninstrumentation that restores original state
-- **Production-Ready**: Designed for enterprise environments with proper error handling
-
-## 🔥 Core Capabilities
-
-### Process Discovery
-```bash
-Found 3 Java processes:
-
-PID: 1234
-  Service: user-auth-service
-  Owner: appuser
-  Agent: ❌ None
-  Type: Spring Boot
-  Config: ❌ Not configured
-
-PID: 5678
-  Service: tomcat-ecommerce
-  Owner: tomcat
-  Agent: ✅ MW
-  Type: Tomcat
-  Instance: ecommerce
-  Webapps: [api, admin, shop]
-  Config: ✅ /etc/middleware/tomcat/tomcat-ecommerce.conf
-```
-
-### Docker Integration
-```bash
-Found 2 Java Docker containers:
-
-Container: payment-service
-  Image: openjdk:11-jre-slim
-  Agent: ❌ Not instrumented
-  Type: Docker Compose
-  Project: microservices
-  Service: payment
-
-Container: legacy-app
-  Image: tomcat:9.0
-  Agent: ✅ Instrumented
-  JAR Files: [legacy-app.war]
-```
-
-### Tomcat Support
-- Automatically detects Tomcat instances and webapps
-- Supports multiple Tomcat deployments per host
-- Handles CATALINA_OPTS integration
-- Per-webapp service naming with context expansion
-
-### Systemd Integration
-- Creates proper systemd drop-in files
-- Manages service restarts automatically
-- Handles permission contexts and security policies
-- Supports both standard Java services and Tomcat
-
-## 🛠 Installation
+## Usage via mw-agent
 
 ```bash
-# Build the project (Yeah yeah release pipeline will be coming soon) 
-go build -o mw-injector ./cmd/mw-injector
+# List all discovered services (grouped by fingerprint)
+sudo mw-agent services list
 
-# Make executable
-chmod +x mw-injector
+# Show individual instances
+sudo mw-agent services list --all
 
-# Move to PATH
-sudo mv mw-injector /usr/local/bin/
+# Filter by language (both "node" and "nodejs" are accepted)
+sudo mw-agent services list --language java
 
+# Instrument via OBI (by service name or fingerprint)
+sudo mw-agent instrument --type obi --language java book-service-java-docker
+sudo mw-agent instrument --type obi --language java dbeb5aa2b3f80d19
+
+# Instrument via systemd drop-in
+sudo mw-agent instrument --type systemd --language java my-service
+
+# Uninstrument
+sudo mw-agent uninstrument --type obi book-service-java-docker
+sudo mw-agent uninstrument --type systemd my-service
 ```
 
-## 📋 Requirements
+### Example output
+
+```
+FINGERPRINT        SERVICE NAME                  LANGUAGE  TYPE      PORTS  INSTANCES  INSTRUMENTED
+e6f38b1db677d920   book-service-java             java      systemd   8086   1          -
+9fff4fcb924d5413   book-service-java-docker      java      docker    8086   1          -
+8d3392312658de2e   browse-bay-backend            node      system    3000   1          -
+8544b3b66cebbf8d   unattended-upgrade-shutdown   python    systemd   -      1          -
+```
+
+## Architecture
+
+### Discovery Pipeline
+
+Registry-driven with `LanguageHandler` interface. Each handler implements Detect, Enrich, PassesFilter, and ToServiceSetting:
+
+```
+/proc scan → classify by language → enrich (args, env, listeners) → batch container resolution → filter → ServiceSetting
+```
+
+### Instrumentation Strategies
+
+Pluggable via `InstrumentationStrategy` interface, tried in order:
+
+1. **SystemdDropinStrategy** — creates `/etc/systemd/system/{unit}.service.d/middleware-otel.conf` with LD_PRELOAD. Requires the process to be managed by a systemd unit.
+2. **OBIStrategy** — adds YAML selectors to `/etc/obi-agent/config.yaml` and restarts the obi-agent service. Handles any process including non-systemd ones via eBPF. Language names are translated to OTel semantic convention values (e.g., `node` becomes `nodejs`) before writing selectors. A warning is logged when a service has no listening ports detected.
+
+### Process Fingerprint
+
+Stable workload identity hash (SHA256 of exe_path + language-specific args). Ports are deliberately excluded — they can be unavailable during startup and would cause fingerprint instability. All replicas of the same app share a fingerprint. Used for grouping in `services list` and as an alternative identifier for instrument/uninstrument commands.
+
+### Service Name Resolution
+
+Each language handler implements a priority-based heuristic chain (first match wins):
+
+**Java:** Container name → `OTEL_SERVICE_NAME`/`SERVICE_NAME` env → Systemd unit name → `-Dspring.application.name` / `-Dservice.name` → JAR filename → Main class → JAR directory
+
+**Node.js:** Systemd unit name → `--name=`/`--service=`/`SERVICE_NAME=` CLI flags → package.json name → Entry point filename (any first positional arg, including extensionless scripts) → Working directory (last 2 meaningful segments)
+
+**Python:** `OTEL_SERVICE_NAME`/`SERVICE_NAME`/`FLASK_APP` env → Container name → Virtualenv parent directory → WSGI module name / `.py` script basename → Script parent directory → Working directory (last 2 meaningful segments)
+
+**Filtering rules:**
+- Systemd unit names from user-session desktop units (`app-*` prefix per systemd Desktop Environment spec) are skipped — the name falls through to the next heuristic
+- Node.js package manager launchers (npm, npx, yarn, pnpm, corepack) are filtered from discovery entirely — only the actual app process is kept
+- Generic names (index, app, main, server, java, etc.) are rejected and fall through to the next heuristic
+
+### Container Detection
+
+Cgroup-based runtime detection distinguishes Docker, Podman, containerd, and LXC. Container names resolved in batch via HTTP over Unix socket (no Docker SDK dependency). Supports Docker (`/var/run/docker.sock`) and Podman (`/run/podman/podman.sock`).
+
+## Package Structure
+
+| Package | Purpose |
+|---------|---------|
+| `pkg/discovery/` | Process discovery engine, language handlers, container detection |
+| `pkg/otelinject/` | Instrumentation strategies, OBI config management, service listing API |
+| `pkg/systemd/` | Systemd service management |
+| `pkg/agent/` | Java agent installation and validation |
+| `pkg/config/` | Middleware.io environment variable configuration |
+| `pkg/state/` | JSON-based state persistence |
+| `pkg/reporter/` | Backend API reporting client |
+
+## Build
+
+```bash
+go build ./...
+go test ./...
+```
+
+## Requirements
 
 - Linux (systemd-based distributions)
-- Root privileges (for system-wide instrumentation)
-- Docker (optional, for container instrumentation)
-- Middleware.io account and API key
-
-## 🎮 Usage Examples
-
-### Basic Workflow
-```bash
-# 1. See what's running
-sudo mw-injector list-all
-
-# 2. Auto-instrument everything
-sudo mw-injector auto-instrument
-# Enter your Middleware.io API key when prompted
-
-# 3. Verify instrumentation, it would show the instrumented services
-sudo mw-injector list-all
-
-# 4. Check your Middleware.io dashboard
-# 🎉 Data should be flowing
-```
-
-### Docker Containers
-```bash
-# Instrument all Java containers
-sudo mw-injector instrument-docker
-
-# Instrument specific container
-sudo mw-injector instrument-container my-java-app
-
-# Remove instrumentation
-sudo mw-injector uninstrument-docker
-```
-
-### Cleanup
-```bash
-# Remove all systemd instrumentation
-sudo mw-injector uninstrument
-
-# Remove Docker instrumentation
-sudo mw-injector uninstrument-docker
-```
-
-## 🏗 Architecture
-
-MW Injector is built with a modular architecture:
-
-- **Agent Management**: Handles Java agent installation and permissions
-- **Process Discovery**: Finds and analyzes Java processes across the system
-- **Service Naming**: Generates intelligent service names from process context
-- **Systemd Integration**: Manages service configuration and restarts
-- **State Management**: Tracks instrumentation state and handles cleanup
-
-
-**Built with ❤️  and way too much nicotine on sleepless nights**
-
-*Making Java instrumentation suck less, one process at a time.*
+- Go 1.24+
+- Root privileges for instrumentation
+- Docker/Podman (optional, for container discovery)
+- OBI agent (optional, for eBPF instrumentation)

@@ -9,10 +9,10 @@ import (
 )
 
 // InstrumentOBI instruments a service via OBI by adding an OBI selector to the
-// OBI config and restarting the obi-agent. The serviceName must match a
-// currently discovered service.
-func InstrumentOBI(serviceName string, lang Language, logger *slog.Logger) error {
-	setting, err := findServiceByName(serviceName, lang, logger)
+// OBI config and restarting the obi-agent. The identifier can be a service
+// name or a fingerprint.
+func InstrumentOBI(identifier string, lang Language, logger *slog.Logger) error {
+	setting, err := findService(identifier, lang, logger)
 	if err != nil {
 		return err
 	}
@@ -28,14 +28,22 @@ func InstrumentOBI(serviceName string, lang Language, logger *slog.Logger) error
 }
 
 // UninstrumentOBI removes an OBI selector for the named service and restarts
-// the obi-agent.
-func UninstrumentOBI(serviceName string, logger *slog.Logger) error {
+// the obi-agent. The identifier can be a service name or a fingerprint.
+func UninstrumentOBI(identifier string, logger *slog.Logger) error {
 	strategy := NewOBIStrategyWithLogger(logger)
 
-	setting := discovery.ServiceSetting{
-		ServiceName: serviceName,
+	// Try direct selector name match first.
+	cfg, err := ReadOBIConfig(strategy.configPath)
+	if err == nil && cfg.HasSelector(identifier) {
+		return strategy.Uninstrument(discovery.ServiceSetting{ServiceName: identifier})
 	}
-	return strategy.Uninstrument(setting)
+
+	// Identifier might be a fingerprint — run discovery to resolve it.
+	serviceName, err := resolveFingerprint(identifier, logger)
+	if err != nil {
+		return fmt.Errorf("cannot resolve %q to a service: %w", identifier, err)
+	}
+	return strategy.Uninstrument(discovery.ServiceSetting{ServiceName: serviceName})
 }
 
 // InstrumentOBIBulk instruments all discovered services of the given language
@@ -83,21 +91,85 @@ func InstrumentOBIBulk(lang Language, logger *slog.Logger) error {
 	return nil
 }
 
-// findServiceByName discovers services and returns the ServiceSetting matching
-// the given name and language.
-func findServiceByName(serviceName string, lang Language, logger *slog.Logger) (discovery.ServiceSetting, error) {
+// findService discovers services and returns the ServiceSetting matching the
+// given identifier (tried as service name first, then fingerprint) and language.
+func findService(identifier string, lang Language, logger *slog.Logger) (discovery.ServiceSetting, error) {
 	settings, err := discoverServiceSettings(lang, logger)
 	if err != nil {
 		return discovery.ServiceSetting{}, err
 	}
 
+	// Try exact name match.
+	var nameMatches []discovery.ServiceSetting
 	for _, s := range settings {
-		if s.ServiceName == serviceName {
+		if s.ServiceName == identifier {
+			nameMatches = append(nameMatches, s)
+		}
+	}
+
+	if len(nameMatches) == 1 {
+		return nameMatches[0], nil
+	}
+
+	if len(nameMatches) > 1 {
+		fp := nameMatches[0].Fingerprint
+		allSame := true
+		for _, m := range nameMatches[1:] {
+			if m.Fingerprint != fp {
+				allSame = false
+				break
+			}
+		}
+		if allSame {
+			return nameMatches[0], nil
+		}
+		return discovery.ServiceSetting{}, fmt.Errorf(
+			"multiple different workloads named %q found (fingerprints: %s); use fingerprint to disambiguate",
+			identifier, collectFingerprints(nameMatches))
+	}
+
+	// Try fingerprint match.
+	for _, s := range settings {
+		if s.Fingerprint == identifier {
 			return s, nil
 		}
 	}
 
-	return discovery.ServiceSetting{}, fmt.Errorf("service %q (language: %s) not found in discovered services", serviceName, lang)
+	return discovery.ServiceSetting{}, fmt.Errorf(
+		"service %q (language: %s) not found in discovered services", identifier, lang)
+}
+
+// resolveFingerprint runs discovery across all languages and returns the
+// service name for the given fingerprint.
+func resolveFingerprint(fingerprint string, logger *slog.Logger) (string, error) {
+	rawReport, err := discovery.GetAgentReportValueWithLogger(logger)
+	if err != nil {
+		return "", fmt.Errorf("discovery failed: %w", err)
+	}
+
+	osConfig, ok := rawReport[runtime.GOOS]
+	if !ok {
+		return "", fmt.Errorf("no services found for %s", runtime.GOOS)
+	}
+
+	for _, s := range osConfig.AutoInstrumentationSettings {
+		if s.Fingerprint == fingerprint {
+			return s.ServiceName, nil
+		}
+	}
+	return "", fmt.Errorf("no service with fingerprint %q found", fingerprint)
+}
+
+func collectFingerprints(settings []discovery.ServiceSetting) string {
+	seen := make(map[string]struct{})
+	var fps []string
+	for _, s := range settings {
+		if _, ok := seen[s.Fingerprint]; !ok {
+			seen[s.Fingerprint] = struct{}{}
+			fps = append(fps, s.Fingerprint)
+		}
+	}
+	return fmt.Sprintf("%v", fps)
 }
 
 // discoverServiceSettings runs the discovery pipeline and converts the results

@@ -64,6 +64,47 @@ func extractServiceNameFromEnviron(pid int32) string {
 	return ""
 }
 
+// serviceNameFromWorkDir derives a service name from a working directory path
+// by taking the last two meaningful (non-generic) segments and joining them
+// with a dash. This gives better context than a single segment — e.g.
+// "/home/user/browse-bay/backend" → "browse-bay-backend" rather than just
+// "backend".
+func serviceNameFromWorkDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
+
+	parts := strings.Split(dir, "/")
+
+	genericDirs := map[string]bool{
+		"": true, ".": true, "..": true, "/": true, "home": true, "opt": true,
+		"usr": true, "var": true, "tmp": true, "app": true, "apps": true,
+		"bin": true, "lib": true, "lib64": true, "src": true, "main": true,
+		"resources": true, "static": true, "public": true, "build": true,
+		"dist": true, "node-modules": true, "work": true,
+	}
+
+	var meaningful []string
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" && !genericDirs[strings.ToLower(part)] {
+			meaningful = append(meaningful, part)
+		}
+	}
+
+	if len(meaningful) == 0 {
+		return ""
+	}
+
+	// Take the last 2 meaningful segments for context.
+	start := len(meaningful) - 2
+	if start < 0 {
+		start = 0
+	}
+	name := strings.Join(meaningful[start:], "-")
+	return cleanName(name)
+}
+
 // extractSystemdUnit parses the process cgroup to find its systemd unit name.
 // Returns "" if the process is not managed by systemd or belongs to an ignored unit.
 func extractSystemdUnit(pid int32) string {

@@ -184,6 +184,7 @@ func (h *JavaHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 		Key:               key,
 		SystemdUnit:       unitname,
 		Listeners:         proc.Listeners(),
+		Fingerprint:       proc.Fingerprint(),
 	}
 }
 

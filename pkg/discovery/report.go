@@ -34,7 +34,7 @@ type ServiceSetting struct {
 	Key                 string     `json:"key"`
 	InstrumentThis      bool       `json:"instrument_this"` // I want this to default to false.
 	ProcessManager      string     `json:"process_manager,omitempty"`
-	Listeners           []Listener `json:"listeners,omitempty"`
+	Listeners           []Listener `json:"listeners,omitempty"` // ports
 	InstrumentationType string     `json:"instrumentation_type,omitempty"`
 	Fingerprint         string     `json:"fingerprint,omitempty"`
 }
@@ -236,7 +236,7 @@ func parseCgroupUnitName(pid int32) (string, bool) {
 		segments := strings.Split(parts[2], "/")
 		for i := len(segments) - 1; i >= 0; i-- {
 			seg := segments[i]
-			if strings.HasSuffix(seg, ".service") && !strings.HasPrefix(seg, "user@") {
+			if strings.HasSuffix(seg, ".service") && !strings.HasPrefix(seg, "user@") && !strings.HasPrefix(seg, "app-") {
 				return strings.TrimSuffix(seg, ".service"), true
 			}
 		}

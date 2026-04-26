@@ -74,6 +74,10 @@ func (s *OBIStrategy) ValidateAssets(_ discovery.Language, _ string) error {
 // Instrument builds an OBI selector from the ServiceSetting, adds it to
 // the OBI config, and restarts the obi-agent.
 func (s *OBIStrategy) Instrument(service discovery.ServiceSetting, lang discovery.Language) error {
+	if len(service.Listeners) == 0 {
+		s.log("WARNING: no listening ports detected for service, OBI selector will match by language only",
+			"service", service.ServiceName)
+	}
 	sel := buildOBISelector(service, lang)
 
 	cfg, err := ReadOBIConfig(s.configPath)
@@ -114,13 +118,24 @@ func (s *OBIStrategy) Uninstrument(service discovery.ServiceSetting) error {
 	return s.restartOBI()
 }
 
+var obiLanguageMap = map[discovery.Language]string{
+	discovery.LangJava:   "java",
+	discovery.LangNode:   "nodejs",
+	discovery.LangPython: "python",
+}
+
 func buildOBISelector(service discovery.ServiceSetting, lang discovery.Language) OBISelector {
-	sel := OBISelector{
-		Name:      service.ServiceName,
-		Languages: string(lang),
+	obiLang := string(lang)
+	if mapped, ok := obiLanguageMap[lang]; ok {
+		obiLang = mapped
 	}
 
-	if service.ServiceType == "docker" {
+	sel := OBISelector{
+		Name:      service.ServiceName,
+		Languages: obiLang,
+	}
+
+	if service.ServiceType != "standalone" && service.ServiceType != "systemd" && service.ServiceType != "system" {
 		sel.ContainersOnly = true
 	}
 

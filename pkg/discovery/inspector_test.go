@@ -58,14 +58,14 @@ func TestNodeHandlerDetect(t *testing.T) {
 			wantOK: true,
 		},
 		{
-			name:   "npm start pattern",
-			proc:   ProcessInfo{ExeName: "npm", CmdLine: "npm start"},
+			name:   "npm resolves to node exe",
+			proc:   ProcessInfo{ExeName: "node", CmdLine: "npm start"},
 			wantOK: true,
 		},
 		{
-			name:   "npx pattern",
-			proc:   ProcessInfo{ExeName: "npx", CmdLine: "npx ts-node server.ts"},
-			wantOK: true,
+			name:   "shell wrapper not detected",
+			proc:   ProcessInfo{ExeName: "dash", CmdLine: "sh -c node index.js"},
+			wantOK: false,
 		},
 		{
 			name:   "not node",

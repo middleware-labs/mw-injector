@@ -20,21 +20,11 @@ type NodeHandler struct{}
 func (h *NodeHandler) Lang() Language { return LangNode }
 
 // Detect returns true if the process is a Node.js process, identified
-// by executable name (node, nodejs) or command patterns (npm, yarn, npx).
+// by executable name (node, nodejs). Package managers (npm, yarn, etc.)
+// resolve to the node binary via symlink/shebang, so ExeName is always
+// "node" — no cmdline pattern matching needed.
 func (h *NodeHandler) Detect(proc *ProcessInfo) bool {
-	exeLower := strings.ToLower(proc.ExeName)
-	if nodeExecutables[exeLower] {
-		return true
-	}
-
-	cmdLower := strings.ToLower(proc.CmdLine)
-	for _, pattern := range nodeCmdPatterns {
-		if strings.Contains(cmdLower, pattern) {
-			return true
-		}
-	}
-
-	return false
+	return nodeExecutables[strings.ToLower(proc.ExeName)]
 }
 
 // Enrich populates a Process struct with Node.js-specific details.
@@ -88,6 +78,11 @@ func (h *NodeHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 
 	// Slow path
 	if isIgnoredSystemdUnit(pid) {
+		CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{Ignore: true})
+		return nil
+	}
+
+	if isNodeLauncher(cmdArgs) {
 		CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{Ignore: true})
 		return nil
 	}
@@ -195,6 +190,7 @@ func (h *NodeHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 		Key:               key,
 		SystemdUnit:       unitname,
 		Listeners:         proc.Listeners(),
+		Fingerprint:       proc.Fingerprint(),
 	}
 }
 
@@ -213,20 +209,20 @@ func (h *NodeHandler) extractNodeInfo(proc *Process, cmdArgs []string) {
 			continue
 		}
 
-		if strings.HasSuffix(arg, ".js") || strings.HasSuffix(arg, ".mjs") || strings.HasSuffix(arg, ".ts") {
-			entryPoint = arg
+		// First positional arg after "node" is the entry point — whether
+		// it's "index.js", "server.mjs", or an extensionless script like
+		// "codegraph" (npm-installed CLI with #!/usr/bin/env node shebang).
+		entryPoint = arg
 
-			if !filepath.IsAbs(entryPoint) {
-				if absPath, err := filepath.Abs(entryPoint); err == nil {
-					workingDirectory = filepath.Dir(absPath)
-					entryPoint = filepath.Base(absPath)
-				}
-			} else {
-				workingDirectory = filepath.Dir(entryPoint)
-				entryPoint = filepath.Base(entryPoint)
-			}
-			break
+		if filepath.IsAbs(entryPoint) {
+			workingDirectory = filepath.Dir(entryPoint)
+			entryPoint = filepath.Base(entryPoint)
+		} else if workingDirectory != "" {
+			absPath := filepath.Join(workingDirectory, entryPoint)
+			workingDirectory = filepath.Dir(absPath)
+			entryPoint = filepath.Base(absPath)
 		}
+		break
 	}
 
 	proc.Details[DetailEntryPoint] = entryPoint
@@ -272,7 +268,7 @@ func (h *NodeHandler) extractServiceName(proc *Process, cmdArgs []string) {
 
 	workDir := proc.DetailString(DetailWorkingDirectory)
 	if workDir != "" {
-		if name := extractNameFromDir(workDir); name != "" {
+		if name := serviceNameFromWorkDir(workDir); name != "" {
 			proc.ServiceName = name
 			return
 		}
@@ -385,14 +381,23 @@ var nodeExecutables = map[string]bool{
 	"nodejs": true,
 }
 
-// nodeCmdPatterns lists command line patterns that indicate a Node.js process.
-var nodeCmdPatterns = []string{
-	"node ",
-	"npm start",
-	"npm run",
-	"npx ",
-	"yarn start",
-	"yarn run",
+// nodeLaunchers lists argv[0] values that identify Node.js package manager
+// launchers (npm, yarn, etc.) rather than actual application processes.
+var nodeLaunchers = map[string]bool{
+	"npm":      true,
+	"npx":      true,
+	"yarn":     true,
+	"pnpm":     true,
+	"corepack": true,
+}
+
+// isNodeLauncher returns true if the process is a Node.js package manager
+// launcher (npm start, yarn run, etc.) rather than an actual application.
+func isNodeLauncher(cmdArgs []string) bool {
+	if len(cmdArgs) == 0 {
+		return false
+	}
+	return nodeLaunchers[strings.ToLower(cmdArgs[0])]
 }
 
 // extractNodeServiceNameFromCmdArgs extracts a service name from Node.js

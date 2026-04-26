@@ -214,6 +214,7 @@ func (h *PythonHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 		ProcessManager: proc.DetailString(DetailProcessManager),
 		SystemdUnit:    unitname,
 		Listeners:      proc.Listeners(),
+		Fingerprint:    proc.Fingerprint(),
 	}
 }
 
@@ -224,6 +225,11 @@ func (h *PythonHandler) extractPythonInfo(proc *Process, cmdArgs []string) {
 		proc.Details[DetailVenvPath] = filepath.Dir(filepath.Dir(proc.ExecutablePath))
 	}
 
+	// Read the target process's working directory from /proc.
+	if cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", proc.PID)); err == nil {
+		proc.Details[DetailWorkingDirectory] = cwd
+	}
+
 	for i, arg := range cmdArgs {
 		if i == 0 || strings.HasPrefix(arg, "-") {
 			continue
@@ -231,8 +237,12 @@ func (h *PythonHandler) extractPythonInfo(proc *Process, cmdArgs []string) {
 
 		if strings.HasSuffix(arg, ".py") {
 			proc.Details[DetailEntryPoint] = arg
-			if abs, err := filepath.Abs(arg); err == nil {
-				proc.Details[DetailWorkingDirectory] = filepath.Dir(abs)
+			if !filepath.IsAbs(arg) {
+				if cwd := proc.DetailString(DetailWorkingDirectory); cwd != "" {
+					proc.Details[DetailWorkingDirectory] = filepath.Dir(filepath.Join(cwd, arg))
+				}
+			} else {
+				proc.Details[DetailWorkingDirectory] = filepath.Dir(arg)
 			}
 			break
 		}
@@ -317,9 +327,8 @@ func (h *PythonHandler) extractServiceName(proc *Process, cmdArgs []string) {
 	// Level 6: Working directory fallback
 	workDir := proc.DetailString(DetailWorkingDirectory)
 	if workDir != "" {
-		dirName := filepath.Base(workDir)
-		if !isGenericPython(dirName) && dirName != "." && dirName != "/" {
-			proc.ServiceName = dirName
+		if name := serviceNameFromWorkDir(workDir); name != "" {
+			proc.ServiceName = name
 			return
 		}
 	}
