@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"sort"
 
 	"github.com/middleware-labs/java-injector/pkg/discovery"
 )
@@ -12,11 +13,17 @@ import (
 // OBI config and restarting the obi-agent. The identifier can be a service
 // name or a fingerprint.
 func InstrumentOBI(identifier string, lang Language, logger *slog.Logger) error {
-	setting, err := findService(identifier, lang, logger)
+	allSettings, err := discoverServiceSettings(lang, logger)
 	if err != nil {
 		return err
 	}
 
+	setting, err := findServiceFrom(identifier, allSettings)
+	if err != nil {
+		return fmt.Errorf("service %q (language: %s) not found in discovered services", identifier, lang)
+	}
+
+	setting.Listeners = collectPortsForFingerprint(setting.Fingerprint, allSettings)
 	setting.InstrumentationType = "obi"
 	strategy := NewOBIStrategyWithLogger(logger)
 
@@ -69,11 +76,27 @@ func InstrumentOBIBulk(lang Language, logger *slog.Logger) error {
 		return fmt.Errorf("read OBI config: %w", err)
 	}
 
-	for _, setting := range settings {
-		sel := buildOBISelector(setting, lang)
+	type group struct {
+		representative discovery.ServiceSetting
+	}
+	groups := make(map[string]*group)
+	var order []string
+	for _, s := range settings {
+		fp := s.Fingerprint
+		if _, ok := groups[fp]; !ok {
+			groups[fp] = &group{representative: s}
+			order = append(order, fp)
+		}
+	}
+
+	for _, fp := range order {
+		g := groups[fp]
+		g.representative.Listeners = collectPortsForFingerprint(fp, settings)
+
+		sel := buildOBISelector(g.representative, lang)
 		overwritten, err := cfg.AddSelector(sel)
 		if err != nil {
-			return fmt.Errorf("add selector for %s: %w", setting.ServiceName, err)
+			return fmt.Errorf("add selector for %s: %w", g.representative.ServiceName, err)
 		}
 		if overwritten && logger != nil {
 			logger.Info("overwriting existing OBI selector", "name", sel.Name)
@@ -84,11 +107,7 @@ func InstrumentOBIBulk(lang Language, logger *slog.Logger) error {
 		return fmt.Errorf("write OBI config: %w", err)
 	}
 
-	if err := strategy.restartOBI(); err != nil {
-		return err
-	}
-
-	return nil
+	return strategy.restartOBI()
 }
 
 // findService discovers services and returns the ServiceSetting matching the
@@ -98,8 +117,12 @@ func findService(identifier string, lang Language, logger *slog.Logger) (discove
 	if err != nil {
 		return discovery.ServiceSetting{}, err
 	}
+	return findServiceFrom(identifier, settings)
+}
 
-	// Try exact name match.
+// findServiceFrom returns the ServiceSetting matching the given identifier
+// from a pre-fetched settings slice. Tries name match first, then fingerprint.
+func findServiceFrom(identifier string, settings []discovery.ServiceSetting) (discovery.ServiceSetting, error) {
 	var nameMatches []discovery.ServiceSetting
 	for _, s := range settings {
 		if s.ServiceName == identifier {
@@ -135,8 +158,29 @@ func findService(identifier string, lang Language, logger *slog.Logger) (discove
 		}
 	}
 
-	return discovery.ServiceSetting{}, fmt.Errorf(
-		"service %q (language: %s) not found in discovered services", identifier, lang)
+	return discovery.ServiceSetting{}, fmt.Errorf("no service matching %q found", identifier)
+}
+
+// collectPortsForFingerprint returns deduplicated, sorted listeners from all
+// settings that share the given fingerprint.
+func collectPortsForFingerprint(fp string, all []discovery.ServiceSetting) []discovery.Listener {
+	seen := make(map[uint16]struct{})
+	var listeners []discovery.Listener
+	for _, s := range all {
+		if s.Fingerprint != fp {
+			continue
+		}
+		for _, l := range s.Listeners {
+			if _, ok := seen[l.Port]; !ok {
+				seen[l.Port] = struct{}{}
+				listeners = append(listeners, l)
+			}
+		}
+	}
+	sort.Slice(listeners, func(i, j int) bool {
+		return listeners[i].Port < listeners[j].Port
+	})
+	return listeners
 }
 
 // resolveFingerprint runs discovery across all languages and returns the

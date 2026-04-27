@@ -149,6 +149,11 @@ Python (python_handler.go `extractServiceName`):
 - **New container runtime:** Implement `ContainerClient` in `pkg/discovery/container_client_{runtime}.go`, add to `initContainerClients()`.
 - **New config field:** Extend `ProcessConfiguration` in `pkg/config/config.go`
 
+## Ideas / TODO
+
+- **Drop `--language` from instrument command:** `InstrumentOBI` currently requires a language param to filter discovery. The user shouldn't need to specify it — discover across all languages, find the service by name/fingerprint, and read the language from the match. Tradeoff: ~3x discovery cost (all languages vs one), but acceptable for a one-shot CLI command. `resolveFingerprint` and `ListOBIServices` already do language-agnostic discovery.
+- **Per-port instrumentation:** Currently instrumenting by name/fingerprint aggregates ports from all instances sharing a fingerprint. No way to instrument only one instance (e.g., port 3000) out of a group. Would need an optional `--port` filter that skips aggregation and builds the OBI selector with only the specified port.
+
 ## CodeGraph
 
 CodeGraph builds a semantic knowledge graph of codebases for faster, smarter code exploration.
