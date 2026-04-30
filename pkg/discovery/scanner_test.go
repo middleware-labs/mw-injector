@@ -108,6 +108,76 @@ func TestReadSelectedEnviron_Self(t *testing.T) {
 	}
 }
 
+func TestParseCmdline(t *testing.T) {
+	tests := []struct {
+		name     string
+		raw      string // cmdline bytes (use \x00 for null separators)
+		exeName  string
+		wantArgs []string
+		wantCmd  string
+	}{
+		{
+			name:     "normal null-separated args",
+			raw:      "node\x00server.js\x00",
+			exeName:  "node",
+			wantArgs: []string{"node", "server.js"},
+			wantCmd:  "node server.js",
+		},
+		{
+			name:     "pm2 rewritten argv with trailing nulls",
+			raw:      "node /home/user/app/index.js\x00\x00\x00\x00",
+			exeName:  "node",
+			wantArgs: []string{"node", "/home/user/app/index.js"},
+			wantCmd:  "node /home/user/app/index.js",
+		},
+		{
+			name:     "pm2 god daemon does not match exe",
+			raw:      "PM2 v6.0.14: God Daemon (/home/user/.pm2)\x00\x00",
+			exeName:  "node",
+			wantArgs: []string{"PM2 v6.0.14: God Daemon (/home/user/.pm2)"},
+			wantCmd:  "PM2 v6.0.14: God Daemon (/home/user/.pm2)",
+		},
+		{
+			name:     "npm space-joined",
+			raw:      "npm start\x00\x00\x00",
+			exeName:  "node",
+			wantArgs: []string{"npm start"},
+			wantCmd:  "npm start",
+		},
+		{
+			name:     "single arg no spaces",
+			raw:      "node\x00",
+			exeName:  "node",
+			wantArgs: []string{"node"},
+			wantCmd:  "node",
+		},
+		{
+			name:     "java rewritten argv",
+			raw:      "java -jar /opt/app.jar\x00\x00",
+			exeName:  "java",
+			wantArgs: []string{"java", "-jar", "/opt/app.jar"},
+			wantCmd:  "java -jar /opt/app.jar",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, cmd := parseCmdline([]byte(tt.raw), tt.exeName)
+			if len(args) != len(tt.wantArgs) {
+				t.Fatalf("args length = %d, want %d\n  got:  %v\n  want: %v", len(args), len(tt.wantArgs), args, tt.wantArgs)
+			}
+			for i := range args {
+				if args[i] != tt.wantArgs[i] {
+					t.Errorf("args[%d] = %q, want %q", i, args[i], tt.wantArgs[i])
+				}
+			}
+			if cmd != tt.wantCmd {
+				t.Errorf("cmdline = %q, want %q", cmd, tt.wantCmd)
+			}
+		})
+	}
+}
+
 func TestReadSelectedEnviron_Filters(t *testing.T) {
 	// HOME should NOT be in the selected environ (not in relevantEnvPrefixes)
 	selfPID := int32(os.Getpid())

@@ -91,11 +91,15 @@ func (h *PythonHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detecto
 			ContainerInfo:     cached.ContainerInfo,
 
 			Details: map[string]any{
-				DetailEntryPoint:     cached.EntryPoint,
-				DetailProcessManager: cached.ServiceType,
-				DetailIsGunicorn:     cached.ServiceType == "gunicorn",
-				DetailIsUvicorn:      cached.ServiceType == "uvicorn",
-				DetailIsCelery:       cached.ServiceType == "celery",
+				DetailEntryPoint:          cached.EntryPoint,
+				DetailProcessManager:      cached.ServiceType,
+				DetailIsGunicorn:          cached.ServiceType == "gunicorn",
+				DetailIsUvicorn:           cached.ServiceType == "uvicorn",
+				DetailIsCelery:            cached.ServiceType == "celery",
+				DetailSystemdUnit:         cached.SystemdUnit,
+				DetailExplicitServiceName: cached.ExplicitServiceName,
+				DetailWorkingDirectory:    cached.WorkingDirectory,
+				DetailModulePath:          cached.ModulePath,
 			},
 		}
 	}
@@ -143,22 +147,27 @@ func (h *PythonHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detecto
 	}
 
 	h.extractPythonInfo(proc, cmdArgs)
+	enrichCommonDetails(proc)
 	h.extractServiceName(proc, cmdArgs)
 	h.detectProcessManager(proc, cmdArgs)
 	h.detectInstrumentation(proc, cmdArgs)
 
 	// Populate cache
 	CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{
-		ServiceName:       proc.ServiceName,
-		ServiceType:       proc.DetailString(DetailProcessManager),
-		RuntimeVersion:    proc.RuntimeVersion,
-		EntryPoint:        proc.DetailString(DetailEntryPoint),
-		HasAgent:          proc.HasAgent,
-		IsMiddlewareAgent: proc.IsMiddlewareAgent,
-		AgentPath:         proc.AgentPath,
-		AgentType:         proc.AgentType,
-		ContainerInfo:     proc.ContainerInfo,
-		Owner:             proc.Owner,
+		ServiceName:         proc.ServiceName,
+		ServiceType:         proc.DetailString(DetailProcessManager),
+		RuntimeVersion:      proc.RuntimeVersion,
+		EntryPoint:          proc.DetailString(DetailEntryPoint),
+		HasAgent:            proc.HasAgent,
+		IsMiddlewareAgent:   proc.IsMiddlewareAgent,
+		AgentPath:           proc.AgentPath,
+		AgentType:           proc.AgentType,
+		ContainerInfo:       proc.ContainerInfo,
+		Owner:               proc.Owner,
+		SystemdUnit:         proc.DetailString(DetailSystemdUnit),
+		ExplicitServiceName: proc.DetailString(DetailExplicitServiceName),
+		WorkingDirectory:    proc.DetailString(DetailWorkingDirectory),
+		ModulePath:          proc.DetailString(DetailModulePath),
 	})
 
 	return proc
@@ -225,18 +234,36 @@ func (h *PythonHandler) extractPythonInfo(proc *Process, cmdArgs []string) {
 		proc.Details[DetailVenvPath] = filepath.Dir(filepath.Dir(proc.ExecutablePath))
 	}
 
-	// Read the target process's working directory from /proc.
 	if cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", proc.PID)); err == nil {
 		proc.Details[DetailWorkingDirectory] = cwd
 	}
 
 	for i, arg := range cmdArgs {
-		if i == 0 || strings.HasPrefix(arg, "-") {
+		if i == 0 {
 			continue
 		}
 
+		if arg == "-m" && i+1 < len(cmdArgs) {
+			mod := cmdArgs[i+1]
+			proc.Details[DetailModulePath] = mod
+			proc.Details[DetailEntryPoint] = mod
+			return
+		}
+
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+
+		// Skip known Python tool names — the next positional arg is the
+		// real entry point (e.g. "uvicorn main:app" → entry point is "main:app").
+		argBase := filepath.Base(arg)
+		if pythonBinaries[strings.ToLower(argBase)] {
+			continue
+		}
+
+		proc.Details[DetailEntryPoint] = filepath.Base(arg)
+
 		if strings.HasSuffix(arg, ".py") {
-			proc.Details[DetailEntryPoint] = arg
 			if !filepath.IsAbs(arg) {
 				if cwd := proc.DetailString(DetailWorkingDirectory); cwd != "" {
 					proc.Details[DetailWorkingDirectory] = filepath.Dir(filepath.Join(cwd, arg))
@@ -244,13 +271,8 @@ func (h *PythonHandler) extractPythonInfo(proc *Process, cmdArgs []string) {
 			} else {
 				proc.Details[DetailWorkingDirectory] = filepath.Dir(arg)
 			}
-			break
 		}
-
-		if i > 0 && cmdArgs[i-1] == "-m" {
-			proc.Details[DetailModulePath] = arg
-			break
-		}
+		return
 	}
 }
 

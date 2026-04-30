@@ -235,6 +235,35 @@ func TestHandlerRegistry_ForLanguage(t *testing.T) {
 	}
 }
 
+func TestIsNodeLauncher(t *testing.T) {
+	tests := []struct {
+		name    string
+		cmdArgs []string
+		want    bool
+	}{
+		{"null-separated npm start", []string{"npm", "start"}, true},
+		{"null-separated npx serve", []string{"npx", "serve"}, true},
+		{"null-separated yarn dev", []string{"yarn", "dev"}, true},
+		{"space-joined npm start", []string{"npm start"}, true},
+		{"space-joined npx create-app", []string{"npx create-react-app my-app"}, true},
+		{"space-joined yarn run dev", []string{"yarn run dev"}, true},
+		{"space-joined pnpm start", []string{"pnpm start"}, true},
+		{"pm2 god daemon rewritten argv", []string{"PM2 v6.0.14: God Daemon (/home/user/.pm2)"}, true},
+		{"pm2 null-separated", []string{"pm2", "start", "app.js"}, true},
+		{"actual app process", []string{"node", "server.js"}, false},
+		{"entry point only", []string{"server.js"}, false},
+		{"empty args", []string{}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isNodeLauncher(tt.cmdArgs); got != tt.want {
+				t.Errorf("isNodeLauncher(%v) = %v, want %v", tt.cmdArgs, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIntegrationRegistry_Empty(t *testing.T) {
 	registry := NewIntegrationRegistry()
 

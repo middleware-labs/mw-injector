@@ -114,3 +114,41 @@ func extractSystemdUnit(pid int32) string {
 	}
 	return name
 }
+
+// extractExplicitServiceName reads /proc/{pid}/environ for human-declared
+// identity env vars (OTEL_SERVICE_NAME, SERVICE_NAME). Unlike
+// extractServiceNameFromEnviron, this excludes framework-specific vars like
+// FLASK_APP — only explicit identity declarations belong in the fingerprint.
+func extractExplicitServiceName(pid int32) string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
+	if err != nil {
+		return ""
+	}
+	for _, env := range strings.Split(string(data), "\x00") {
+		if strings.HasPrefix(env, "OTEL_SERVICE_NAME=") ||
+			strings.HasPrefix(env, "SERVICE_NAME=") {
+			parts := strings.SplitN(env, "=", 2)
+			if len(parts) > 1 && parts[1] != "" {
+				return parts[1]
+			}
+		}
+	}
+	return ""
+}
+
+// enrichCommonDetails populates detail keys shared across all languages:
+// systemd unit name, explicit service name, and working directory.
+// Called during Enrich() before extractServiceName() and Fingerprint().
+func enrichCommonDetails(proc *Process) {
+	if unit := extractSystemdUnit(proc.PID); unit != "" {
+		proc.Details[DetailSystemdUnit] = unit
+	}
+	if name := extractExplicitServiceName(proc.PID); name != "" {
+		proc.Details[DetailExplicitServiceName] = name
+	}
+	if _, exists := proc.Details[DetailWorkingDirectory]; !exists {
+		if cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", proc.PID)); err == nil {
+			proc.Details[DetailWorkingDirectory] = cwd
+		}
+	}
+}

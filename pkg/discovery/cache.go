@@ -22,6 +22,12 @@ type ProcessCacheEntry struct {
 	ContainerInfo     *ContainerInfo
 	Ignore            bool
 	LastSeen          int64
+
+	SystemdUnit         string
+	ExplicitServiceName string
+	WorkingDirectory    string
+	PackageName         string
+	ModulePath          string
 }
 
 type ProcessMetadataCache struct {
