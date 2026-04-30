@@ -106,6 +106,71 @@ func ListListeners(pid int32) []Listener {
 	return matchFDs(pid, byInode)
 }
 
+// InheritParentPorts detects IPC-dispatch workers (e.g. PM2 cluster mode)
+// that have no listen ports and inherits ports from their parent daemon.
+//
+// PM2 cluster workers don't have "pm2" in their cmdline — they look like
+// plain `node <entry_point>`. We identify them by checking if the parent
+// PID's cmdline starts with "PM2" (the God Daemon's rewritten argv).
+//
+// Safety rule: only inherit when ALL workers under the same parent share
+// one fingerprint (single-app daemon). With multiple apps on one daemon,
+// we can't tell which port belongs to which app.
+func InheritParentPorts(procs []*Process) {
+	type parentGroup struct {
+		children     []*Process
+		fingerprints map[string]struct{}
+	}
+	groups := make(map[int32]*parentGroup)
+
+	for _, p := range procs {
+		if p.Language != LangNode {
+			continue
+		}
+		if listeners, ok := p.Details[DetailListeners].([]Listener); ok && len(listeners) > 0 {
+			continue
+		}
+		if p.ParentPID <= 1 {
+			continue
+		}
+		g, exists := groups[p.ParentPID]
+		if !exists {
+			g = &parentGroup{fingerprints: make(map[string]struct{})}
+			groups[p.ParentPID] = g
+		}
+		g.children = append(g.children, p)
+		g.fingerprints[p.Fingerprint()] = struct{}{}
+	}
+
+	for ppid, g := range groups {
+		if !isPM2Daemon(ppid) {
+			continue
+		}
+		if len(g.fingerprints) > 1 {
+			continue
+		}
+		parentListeners := ListListeners(ppid)
+		if len(parentListeners) == 0 {
+			continue
+		}
+		for _, child := range g.children {
+			if child.Details == nil {
+				child.Details = make(map[string]any)
+			}
+			child.Details[DetailListeners] = parentListeners
+		}
+	}
+}
+
+func isPM2Daemon(pid int32) bool {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil || len(data) == 0 {
+		return false
+	}
+	fields := strings.Fields(strings.TrimRight(string(data), "\x00"))
+	return len(fields) > 0 && strings.ToLower(fields[0]) == "pm2"
+}
+
 // readNetnsInode returns the netns inode for a PID via readlink on
 // /proc/<pid>/ns/net. The link target has the form "net:[4026531833]".
 func readNetnsInode(pid int32) (uint64, bool) {

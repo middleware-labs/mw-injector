@@ -248,6 +248,7 @@ func (d *discoverer) enrichWithWorkerPool(ctx context.Context, infos []ProcessIn
 	// share the host netns.
 	portsStart := time.Now()
 	AttachListeners(processes)
+	InheritParentPorts(processes)
 	portsDuration := time.Since(portsStart)
 
 	// Batch-resolve container names via runtime API instead of per-process

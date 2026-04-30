@@ -239,29 +239,194 @@ This aligns with how `ServiceEntry` in `services_api.go` already models workload
 
 ---
 
-## Open Questions
+## PM2 Cluster Mode vs Fork Mode
 
-1. **Gunicorn/Uvicorn verification:** Do our current port detection actually catch ports on Gunicorn workers (which inherit the fd via fork)? Need to test.
+PM2 supports two execution modes. Understanding the difference is critical for port detection:
 
-2. **Node cluster without PM2:** If someone uses `cluster.fork()` directly, the master process is NOT filtered by `isNodeLauncher()`. It looks like a normal Node app. Both master and workers would be detected, but only the master has the port. Should we deduplicate master+workers? Or let them coexist (same fingerprint, master has port, workers don't)?
+### Cluster Mode (`exec_mode: "cluster"`)
 
-3. **PM2 app name:** Should we try to read the PM2 app name (`~/.pm2/dump.pm2` contains the process list with names)? This would improve service name accuracy for PM2-managed apps. But it adds a dependency on PM2's internal file format.
+Uses Node.js's built-in `cluster` module. The PM2 God Daemon acts as the cluster primary:
 
-4. **Multiple apps on one PM2 daemon:** PM2 can manage multiple apps. Each app gets its own workers, all children of the same daemon PID. The parent port inheritance needs to be smart about which ports belong to which app (possibly by matching the worker's entry point to the daemon's listening context). Or simpler: just attribute ALL parent ports to all children, and let the fingerprint grouping sort them out.
+1. When your app calls `server.listen(3000)`, the cluster module **intercepts** that call in the worker
+2. Worker sends an IPC message to the God Daemon (cluster primary)
+3. Daemon creates a `RoundRobinHandle`, which calls `bind()` + `listen()` at the OS level
+4. Workers **never** call `bind()` themselves — they receive connections via IPC message passing
+5. All workers share the same port via the daemon
+
+**Port ownership:** Daemon only. Workers have IPC unix sockets, not listen sockets.
+
+Source: [Node.js Cluster Module](https://nodejs.org/api/cluster.html), [node/lib/internal/cluster/round_robin_handle.js](https://github.com/nodejs/node/blob/main/lib/internal/cluster/round_robin_handle.js)
+
+### Fork Mode (`exec_mode: "fork"`, default)
+
+Uses `child_process.fork()`. Each instance is fully independent:
+
+1. Each worker calls `bind()` + `listen()` directly
+2. If two workers try to bind the same port, the second one **fails** (unless `SO_REUSEPORT`)
+3. Each worker owns its own listen socket
+4. Port detection works normally — each worker has the socket in its fd table
+
+**Port ownership:** Each worker individually. Port detection works out of the box.
+
+### Why This Matters for Us
+
+Only **cluster mode** has the port inheritance problem. Fork mode workers hold their own sockets. Our parent port inheritance logic should only activate for cluster mode workers.
 
 ---
 
-## Next Steps
+## PM2 Port Visibility — Verified Limitation
 
-### Phase 2A: Parent Port Inheritance
+**PM2 has zero port visibility.** It has no native port field, no API to query listening ports, and no way to know what your app passed to `server.listen()`.
 
-1. **Verify Gunicorn/Uvicorn port detection** — test with `gunicorn -w 4` and `uvicorn --workers 4` to confirm fork-inherited sockets are detected
-2. **Design parent port inheritance** — detailed implementation plan for `AttachListeners()` modification
-3. **PM2 name extraction** — investigate `~/.pm2/dump.pm2` format for optional name enrichment
-4. **Test with Node cluster module directly** — verify behavior without PM2 wrapper
+- [GitHub issue #428](https://github.com/Unitech/pm2/issues/428) (2014, closed unresolved): "PM2 list doesn't show used port"
+- [GitHub issue #4907](https://github.com/Unitech/pm2/issues/4907) (2020, still open): "pm2 list doesn't shows the service ports"
 
-### Phase 2B: Multi-Instance ServiceSettings
+The `axm_monitor` in PM2's telemetry tracks HTTP latency/rate but NOT the port. The IPC bus events don't carry it either.
 
-5. **Add `Instances` to `ServiceSetting`** — accumulate workers instead of overwriting in `report.go`
-6. **Update backend API contract** — ensure the report payload conveys instance count and per-instance metadata (PID, ports)
-7. **Aggregate ports across instances** — union of all instance ports for the workload's OBI selector
+**How PM2 "knows" a port:** Only if you explicitly declare `PORT` in the `env` block of your ecosystem config. This shows up in `pm2_env.PORT` via `pm2 jlist`. PM2 also supports `increment_var: 'PORT'` to auto-increment per instance (fork mode).
+
+**What production teams do:** Use ecosystem config as the canonical port map, use nginx `proxy_pass` as the registry, or have apps self-report at startup.
+
+### `pm2 jlist` as Enrichment Source
+
+Shelling out to `pm2 jlist` gives structured JSON with useful fields per worker:
+
+| Field | Value | Use |
+|---|---|---|
+| `pid` | Worker PID | Match to discovered processes |
+| `name` | PM2 app name | Better service name than heuristic |
+| `pm2_env.exec_mode` | `"cluster_mode"` or `"fork_mode"` | Only do port inheritance for cluster |
+| `pm2_env.instances` | Expected count | Show "2/2 instances" |
+| `pm2_env.pm_exec_path` | Entry point path | Cross-check with discovery |
+| `pm2_env.NODE_APP_INSTANCE` | 0, 1, 2... | Instance ordinal |
+
+**Not available in jlist:** Port number (confirmed — PM2 doesn't track it).
+
+Call `pm2 jlist` once during discovery if we detect any PM2 workers (ppid matches a filtered PM2 daemon PID). Cache the result for that discovery cycle. Parse JSON, index by PID.
+
+---
+
+## Multi-App PM2 Daemon Port Attribution Problem
+
+### Architecture
+
+There is **one PM2 God Daemon per `PM2_HOME`** (default `~/.pm2`). All apps share it.
+
+Source: [PM2 Multiple Runtime](https://pm2.io/docs/runtime/features/multiple-pm2/), confirmed via GitHub issues [#2784](https://github.com/Unitech/pm2/issues/2784), [#2987](https://github.com/Unitech/pm2/issues/2987)
+
+### The Problem (Example)
+
+```bash
+pm2 start /home/hardik/browse-bay/backend/index.js --name browsebay -i 2    # port 3001
+pm2 start /home/hardik/chat-app/server.js --name chatapp -i 1                # port 4000
+```
+
+Process tree:
+```
+PID 194707 — PM2 God Daemon
+  fd 3 → TCP *:3001 (LISTEN)    ← browsebay's port
+  fd 5 → TCP *:4000 (LISTEN)    ← chatapp's port
+  │
+  ├── PID 498849 — browsebay worker 0  (fingerprint=aaa111)  PORTS: -
+  ├── PID 498856 — browsebay worker 1  (fingerprint=aaa111)  PORTS: -
+  └── PID 499100 — chatapp worker 0    (fingerprint=bbb222)  PORTS: -
+```
+
+If we naively inherit ALL parent ports to ALL children:
+- browsebay workers → `[3001, 4000]` — port 4000 is wrong
+- chatapp worker → `[3001, 4000]` — port 3001 is wrong
+
+**Why it's unsolvable from /proc:** Both listen sockets are in the daemon's fd table (PID 194707). The kernel doesn't record which socket was opened by which app's cluster master code. It's all one process, one event loop.
+
+**Why `pm2 jlist` doesn't help:** It has `pid`, `name`, `exec_mode`, but NO port field. PM2 doesn't track ports (see above).
+
+### Solution: Conditional Inheritance
+
+**Single app (common case):** If all PM2 cluster workers under the same daemon share the same fingerprint, inherit ALL parent ports. This is safe — all ports belong to the same app.
+
+**Multiple apps (uncommon case):** If workers under the same daemon have different fingerprints, we cannot determine which port belongs to which app. Two options:
+
+1. **Skip port inheritance** — workers show `PORTS: -`. Honest but unhelpful.
+2. **Use OBI's fallback selectors** — OBI can instrument without ports using `languages` + `cmd_args` matching. Log a warning that port-based OBI selector is not available, fall back to cmd_args selector for disambiguation.
+
+Option 1 is safer. OBI already handles portless instrumentation gracefully (logs a warning, matches by language). Users can manually specify ports via the planned user-override feature (see CLAUDE.md TODO).
+
+---
+
+## Resolved Questions
+
+1. **Gunicorn/Uvicorn port detection:** Fork-inherited sockets (Gunicorn prefork, Uvicorn multiprocessing) should be detected because workers inherit the listen socket fd via `fork()`. The fd appears in both parent's and child's fd table. **TODO:** Verify empirically.
+
+2. **Node cluster without PM2:** The master process is not filtered by `isNodeLauncher()` — it looks like a normal Node app. Master and workers coexist with the same fingerprint. Master has the port, workers don't. After Phase 2B (multi-instance accumulation), the port will aggregate correctly via fingerprint grouping — master's port becomes the workload's port. No deduplication needed.
+
+3. **PM2 app name:** Use `pm2 jlist` (structured JSON API) instead of `~/.pm2/dump.pm2` (internal file format). jlist provides PID-to-name mapping, exec_mode, instance count. Call once per discovery cycle if PM2 workers detected.
+
+4. **Multiple apps on one PM2 daemon:** Solved via conditional inheritance (see above). Single-fingerprint = inherit all ports. Multi-fingerprint = skip inheritance, fall back to OBI language+cmd_args matching.
+
+---
+
+## OBI Without Ports
+
+OBI does NOT require ports for instrumentation. The `OBISelector` has multiple optional fields:
+
+```go
+type OBISelector struct {
+    Name           string `yaml:"name,omitempty"`
+    OpenPorts      string `yaml:"open_ports,omitempty"`     // optional
+    ExePath        string `yaml:"exe_path,omitempty"`       // optional
+    CmdArgs        string `yaml:"cmd_args,omitempty"`       // optional — used for Java jar/main class
+    Languages      string `yaml:"languages,omitempty"`      // always set
+    ContainersOnly bool   `yaml:"containers_only,omitempty"`
+}
+```
+
+When no ports are discovered, `buildOBISelector` builds a selector with just `Languages` (and `CmdArgs` for Java). It logs a warning but doesn't fail. This means PM2 cluster workers CAN be instrumented even without port detection — OBI matches by language and command line patterns.
+
+---
+
+## Updated Implementation Plan
+
+### Phase 2 Implementation Order
+
+**Phase 2A: Multi-Instance ServiceSettings + Fingerprint Map Key** (2B+2C combined)
+
+These are tightly coupled. Change together:
+
+1. Add `Instances []InstanceInfo` to `ServiceSetting` — each instance carries PID, create time
+2. Change `report.go` map key from `ss.Key` to `ss.Fingerprint`
+3. Accumulate instances: when `settings[ss.Fingerprint]` already exists, append to its `Instances` list instead of overwriting
+4. Aggregate `Listeners` across all instances (union of ports)
+5. Update `FilterInstrumentable` to use fingerprint as map key
+6. `DiscoverServices()` in `services_api.go` already groups by fingerprint — it will now receive correct instance counts from the report layer
+
+**Backend impact: NONE.** The backend stores `auto_instrumentation_settings` as opaque JSONB. Map key change is invisible. New `instances` field is additive JSON. `ApplyStoredInstrumentThis` joins by `(ServiceName, Language)`, not map key. `parseStoredSettings` iterates whatever keys exist. Frontend re-keys by `s.key || key` (reads value's `key` field).
+
+**CLI impact:** `ps` command shows correct instance count and aggregated ports. `ps -a` shows per-instance detail. Instrument/uninstrument by service name or fingerprint works unchanged — `findService()` already matches by name or fingerprint.
+
+**Phase 2B: Parent Port Inheritance**
+
+After multi-instance is working, add port inheritance for IPC-dispatch workers:
+
+1. During `AttachListeners()`, for each portless worker:
+   - Read `ppid` from `/proc/<pid>/status`
+   - Check if ppid matches a known PM2 daemon (cmdline starts with "PM2")
+   - If yes, check if all workers under that daemon share the same fingerprint
+   - If single fingerprint: read parent's listen ports, attribute to worker
+   - If multiple fingerprints: skip inheritance, log warning
+2. Optionally call `pm2 jlist` for enrichment:
+   - Confirm `exec_mode: "cluster_mode"` (skip fork mode workers — they have their own ports)
+   - Get PM2 app name for service name enrichment
+   - Get expected instance count
+
+**Phase 2C: Frontend Enhancement** (separate phase, Bifrost changes)
+
+Minor Bifrost frontend update to display the new `instances` array:
+
+1. **Linux services grid** (`bifrost/front/.../linux-auto-instrumentation/`):
+   - Show instance count from `instances.length` in the services table
+   - Optionally show per-instance PIDs in an expanded detail row
+   - Show aggregated ports from all instances
+2. **No backend changes needed** — JSONB pass-through already handles the new fields
+3. Bifrost code paths:
+   - Frontend: `/home/hardik/work/mw/middleware/bifrost/front/src/views/modules/installation-v2/pages/agent/linux-auto-instrumentation/`
+   - Backend: `/home/hardik/work/mw/middleware/bifrost/app` (no changes expected)

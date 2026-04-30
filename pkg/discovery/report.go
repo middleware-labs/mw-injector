@@ -12,6 +12,14 @@ import (
 	"strings"
 )
 
+// ReportInstanceInfo holds per-PID details for an individual process instance.
+// Separate from otelinject.InstanceInfo to avoid a circular import.
+type ReportInstanceInfo struct {
+	PID    int32  `json:"pid"`
+	Owner  string `json:"owner"`
+	Status string `json:"status"`
+}
+
 // ServiceSetting represents the detailed status for a single service/process.
 type ServiceSetting struct {
 	PID                 int32      `json:"pid"`
@@ -36,7 +44,8 @@ type ServiceSetting struct {
 	ProcessManager      string     `json:"process_manager,omitempty"`
 	Listeners           []Listener `json:"listeners,omitempty"` // ports
 	InstrumentationType string     `json:"instrumentation_type,omitempty"`
-	Fingerprint         string     `json:"fingerprint,omitempty"`
+	Fingerprint         string             `json:"fingerprint,omitempty"`
+	Instances           []ReportInstanceInfo `json:"instances,omitempty"`
 }
 
 // OSConfig represents the configuration and status for a specific OS (e.g., "linux").
@@ -81,7 +90,8 @@ func GetAgentReportValueWithLogger(logger *slog.Logger) (AgentReportValue, error
 	PruneContainerNameCache()
 
 	// Convert all discovered processes to ServiceSettings using each
-	// language's handler for the conversion.
+	// language's handler for the conversion. Key by fingerprint to
+	// accumulate multiple instances of the same workload class.
 	settings := map[string]ServiceSetting{}
 	for lang, procs := range allProcs {
 		handler := d.handlerRegistry.ForLanguage(lang)
@@ -89,8 +99,28 @@ func GetAgentReportValueWithLogger(logger *slog.Logger) (AgentReportValue, error
 			continue
 		}
 		for _, proc := range procs {
-			if ss := handler.ToServiceSetting(proc); ss != nil {
-				settings[ss.Key] = *ss
+			ss := handler.ToServiceSetting(proc)
+			if ss == nil {
+				continue
+			}
+			mapKey := ss.Fingerprint
+			if mapKey == "" {
+				mapKey = ss.Key
+			}
+			inst := ReportInstanceInfo{
+				PID:    ss.PID,
+				Owner:  ss.Owner,
+				Status: ss.Status,
+			}
+			if existing, ok := settings[mapKey]; ok {
+				existing.Instances = append(existing.Instances, inst)
+				existing.Listeners = mergeListeners(existing.Listeners, ss.Listeners)
+				existing.HasAgent = existing.HasAgent || ss.HasAgent
+				existing.Instrumented = existing.Instrumented || ss.Instrumented
+				settings[mapKey] = existing
+			} else {
+				ss.Instances = []ReportInstanceInfo{inst}
+				settings[mapKey] = *ss
 			}
 		}
 	}
@@ -135,58 +165,21 @@ func ApplyStoredInstrumentThis(
 	return result
 }
 
-func FilterServices(services map[string]ServiceSetting, predicate func(ServiceSetting) bool) map[string]ServiceSetting {
-	result := make(map[string]ServiceSetting)
-	for k, v := range services {
-		if predicate(v) {
-			result[k] = v
+func mergeListeners(a, b []Listener) []Listener {
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[uint16]struct{}, len(a))
+	for _, l := range a {
+		seen[l.Port] = struct{}{}
+	}
+	for _, l := range b {
+		if _, ok := seen[l.Port]; !ok {
+			a = append(a, l)
+			seen[l.Port] = struct{}{}
 		}
 	}
-	return result
-}
-
-func And(predicates ...func(ServiceSetting) bool) func(ServiceSetting) bool {
-	return func(s ServiceSetting) bool {
-		for _, p := range predicates {
-			if !p(s) {
-				return false
-			}
-		}
-		return true
-	}
-}
-
-func FilterInstrumentable(
-	storedSettings map[string]ServiceSetting,
-	currentSettings map[string]ServiceSetting,
-) map[string]ServiceSetting {
-	type serviceIdentity struct {
-		ServiceName string
-		Language    string
-	}
-	currentIndex := make(map[serviceIdentity]ServiceSetting, len(currentSettings))
-	for _, current := range currentSettings {
-		id := serviceIdentity{current.ServiceName, current.Language}
-		currentIndex[id] = current
-	}
-
-	result := make(map[string]ServiceSetting)
-	for _, stored := range storedSettings {
-		if !stored.InstrumentThis {
-			continue
-		}
-
-		id := serviceIdentity{stored.ServiceName, stored.Language}
-		current, exists := currentIndex[id]
-		if !exists {
-			continue
-		}
-
-		current.InstrumentThis = true
-		result[current.Key] = current
-	}
-
-	return result
+	return a
 }
 
 func deriveAgentType(hasAgent bool, agentPath string, isMiddleware bool) string {

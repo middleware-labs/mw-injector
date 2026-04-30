@@ -86,11 +86,21 @@ func DiscoverServices(opts DiscoverServicesOpts) ([]ServiceEntry, error) {
 			order = append(order, fp)
 		}
 
-		g.instances = append(g.instances, InstanceInfo{
-			PID:    setting.PID,
-			Owner:  setting.Owner,
-			Status: setting.Status,
-		})
+		if len(setting.Instances) > 0 {
+			for _, ri := range setting.Instances {
+				g.instances = append(g.instances, InstanceInfo{
+					PID:    ri.PID,
+					Owner:  ri.Owner,
+					Status: ri.Status,
+				})
+			}
+		} else {
+			g.instances = append(g.instances, InstanceInfo{
+				PID:    setting.PID,
+				Owner:  setting.Owner,
+				Status: setting.Status,
+			})
+		}
 
 		for _, l := range setting.Listeners {
 			g.ports[int(l.Port)] = struct{}{}

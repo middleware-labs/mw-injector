@@ -504,50 +504,66 @@ Goal: Solve two remaining problems exposed by PM2 cluster mode testing:
 
 Detailed research for both problems is in `docs/process-manager-port-research.md`.
 
-#### Phase 2A: Parent Port Inheritance
+#### Design Decisions (Resolved)
 
-When a worker process has no listen ports but its parent is a known process manager (PM2 God Daemon, Node cluster master), look up the parent's listen ports and attribute them to the worker.
+**PM2 daemon visibility:** Keep filtering (Option 2 from original analysis). Users care about their app, not PM2 internals. The daemon is infrastructure, not a workload — it has no meaningful fingerprint, no instrumentable code, and would add cognitive load to the service list.
 
-**Key design question:** Should we detect PM2 daemon processes (currently filtered by `isNodeLauncher`) and show them in the service list? The daemon holds the listen socket, so showing it would make ports visible immediately. Options:
-
-1. **Detect but mark as infrastructure** — let PM2 daemon through `Enrich()` as `serviceType = "pm2-daemon"`, show in `ps` with its port, exclude from instrumentation. Then link it to child workers.
-2. **Keep filtering but inherit ports** — PM2 daemon stays invisible, but during `AttachListeners()` walk the parent PID chain and attribute daemon's ports to worker children. Daemon invisible, ports appear on workers.
-
-Option 2 is cleaner long-term (users care about their app, not PM2 internals). Option 1 gives immediate visibility. Could do option 1 as quick win, then replace with option 2.
-
-See `process-manager-port-research.md` for the full taxonomy of socket distribution patterns and proposed algorithm.
-
-#### Phase 2B: Multi-Instance ServiceSettings
-
-The `settings[ss.Key]` map in `report.go:93` silently drops replicas when multiple processes share the same Key (e.g., PM2 cluster workers both produce `host-node-e-commerce-backend`).
-
-The fix is NOT to change the map key — that would break the backend API contract which expects one entry per workload class.
-
-Instead, `ServiceSetting` should support multiple instances per entry:
-
-1. **Add `Instances []InstanceInfo` to `ServiceSetting`** — each instance carries PID, ports, create time
-2. **Accumulate in the map** — when `settings[ss.Key]` already exists, append to its Instances list instead of overwriting
-3. **Report instance count** — backend gets one ServiceSetting per workload class with accurate instance metadata
-4. **Aggregate ports** — union of all instance ports becomes the workload's port set
-
-This aligns with how `ServiceEntry` in `services_api.go` already models workloads (fingerprint → multiple instances). The report layer should match.
-
-#### Phase 2C: Fingerprint as Map Key
-
-After multi-instance support is in place, migrate the settings map key from `ss.Key` to `ss.Fingerprint`:
-
-1. `pkg/discovery/report.go` line 93: `settings[ss.Key] = *ss` → `settings[ss.Fingerprint] = *ss` (with accumulation)
-2. `pkg/discovery/report.go` line 186 (`FilterInstrumentable`): `result[current.Key] = current` → `result[current.Fingerprint] = current`
-3. `pkg/otelinject/services_api.go` lines 74-77: Add comment explaining Key fallback is for legacy stored settings
-
-**No changes needed in:**
-- Handler `ToServiceSetting()` methods — `Key` field stays, used by frontend
-- `ApplyStoredInstrumentThis` — joins by `(ServiceName, Language)`, not map key
-- `parseStoredSettings` — reads whatever keys backend has
-- Bifrost frontend — uses `finalKey = s?.key || key` (prefers `Key` field inside JSON value)
-- Bifrost backend — treats map keys as opaque
+**Backend contract:** Does NOT need to change. The Bifrost backend stores `auto_instrumentation_settings` as opaque JSONB in PostgreSQL — it never iterates map keys, never validates entries, just stores and returns the blob unchanged. Adding `instances` is additive JSON. Changing the map key from human-readable to fingerprint is invisible. `ApplyStoredInstrumentThis` joins by `(ServiceName, Language)`, not map key. `parseStoredSettings` iterates whatever keys exist. Frontend re-keys by `s.key || key` (reads value's `key` field, falls back to map key).
 
 **Frontend key ping-pong (analyzed, harmless):** Frontend re-keys locally by `s.key` (human-readable) on read and sends that back on save. Agent re-keys by fingerprint on next sync. Harmless because merge logic joins by `(ServiceName, Language)` and agent replaces entire map on each POST.
+
+#### Phase 2A: Multi-Instance ServiceSettings + Fingerprint Map Key — COMPLETED
+
+**Status:** Implemented and tested (2026-04-30).
+
+Combines original 2B + 2C — they're tightly coupled.
+
+**What was implemented:**
+
+1. **`ReportInstanceInfo` struct and `Instances` field** added to `ServiceSetting` (`report.go`). Separate from `otelinject.InstanceInfo` to avoid circular dependency.
+2. **Map key changed** from `ss.Key` to `ss.Fingerprint` in `GetAgentReportValueWithLogger` (falls back to `ss.Key` when fingerprint is empty).
+3. **Accumulation logic**: first instance seeds the entry with `Instances` slice; subsequent instances append to `Instances`, merge `Listeners` (deduplicated by port), OR-merge `HasAgent`/`Instrumented`.
+4. **`mergeListeners()` helper** for port deduplication across instances.
+5. **Dead code deleted**: `FilterInstrumentable`, `FilterServices`, `And` (verified unused across mw-injector and mw-agent).
+6. **`DiscoverServices()` updated** to read pre-aggregated `Instances` when populated, with backward-compat fallback to top-level PID/Owner/Status for old stored settings.
+
+**Tests added:**
+- `report_test.go`: `TestMergeListeners` (5 cases), `TestAccumulateByFingerprint` (4 cases)
+- `services_api_test.go`: `TestBuildInstancesFromSetting` (2 cases: pre-aggregated vs nil fallback)
+
+**Verified:** `ps` shows correct instance count (2 for PM2 cluster). `ps -a` shows both PIDs. Stable across multiple runs.
+
+#### Phase 2B: Parent Port Inheritance — COMPLETED
+
+**Status:** Implemented and tested (2026-04-30).
+
+**What was implemented:**
+
+`InheritParentPorts()` in `ports.go`, called after `AttachListeners()` in the discovery pipeline:
+
+1. Groups portless Node.js processes by their parent PID
+2. Checks if the parent is a PM2 daemon via `isPM2Daemon()` — reads `/proc/<ppid>/cmdline` and checks if first word is "pm2" (the God Daemon rewrites its argv to `PM2 v<version>: God Daemon (...)`)
+3. Safety check: only inherits when ALL workers under the same daemon share one fingerprint (single-app case)
+4. Reads daemon's listen ports via `ListListeners(ppid)` and attributes them to all workers
+
+**Key finding during implementation:** PM2 cluster workers do NOT have "pm2" in their cmdline — their cmdline is `node /path/to/entry.js`. The `detectProcessManager` heuristic (checking cmdline for "pm2") doesn't tag them. The fix was to identify workers by checking the **parent PID's** cmdline, not the worker's.
+
+**Multi-app safety:** When workers under the same daemon have different fingerprints (multiple apps), port inheritance is skipped entirely — can't determine port-to-app mapping.
+
+**Verified:** `e-commerce-backend` shows `PORTS: 3001, INSTANCES: 2` with PM2 cluster mode (`pm2 start index.js -i 2`). Port stable across 3 consecutive runs.
+
+#### Phase 2C: Frontend Enhancement (Bifrost)
+
+Minor Bifrost frontend update to display the new `instances` array in the Linux services grid:
+
+1. Show instance count from `instances.length` in the services table
+2. Optionally show per-instance PIDs in an expanded detail row
+3. Show aggregated ports from all instances
+4. No backend changes needed — JSONB pass-through handles new fields
+
+Bifrost code paths:
+- Frontend: `bifrost/front/src/views/modules/installation-v2/pages/agent/linux-auto-instrumentation/`
+- Backend: `bifrost/app` — no changes expected
 
 ### Pre-Phase 1 fixes (already in codebase)
 
