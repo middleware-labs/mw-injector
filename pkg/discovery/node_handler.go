@@ -179,10 +179,6 @@ func (h *NodeHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 			key = fmt.Sprintf("container-node-%s", proc.ContainerInfo.ContainerID[:12])
 			serviceName = proc.ContainerInfo.ContainerName
 		}
-	} else if proc.DetailBool(DetailIsPM2) {
-		serviceType = "pm2"
-	} else if proc.DetailBool(DetailIsForever) {
-		serviceType = "forever (node.js)"
 	}
 
 	agentType := deriveAgentType(proc.HasAgent, proc.AgentPath, proc.IsMiddlewareAgent)
