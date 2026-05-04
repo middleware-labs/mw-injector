@@ -16,26 +16,18 @@ import (
 )
 
 type SystemdDropin struct {
-	LdPreload        string `json:"LD_PRELOAD"`
-	ServiceName      string `json:"OTEL_SERVICE_NAME"`
-	ExporterEndpoint string `json:"OTEL_EXPORTER_OTLP_ENDPOINT"`
-	OtlpHeaders      string `json:"OTEL_EXPORTER_OTLP_HEADERS"`
+	LdPreload   string `json:"LD_PRELOAD"`
+	ServiceName string `json:"OTEL_SERVICE_NAME"`
 }
 
 func NewSystemdDropin(cleanName string) (*SystemdDropin, error) {
-	// Get values from Environment
-	apiKey := os.Getenv("MW_API_KEY")
-	target := os.Getenv("MW_TARGET")
-
 	// Normalize: strip .service suffix so path building is consistent
 	// regardless of whether callers pass "flask-app" or "flask-app.service"
 	unitName := strings.TrimSuffix(cleanName, ".service")
 
 	return &SystemdDropin{
-		LdPreload:        DefaultLibOtelInjectorPath,
-		ServiceName:      unitName,
-		ExporterEndpoint: target,
-		OtlpHeaders:      fmt.Sprintf("Authorization=%s", apiKey),
+		LdPreload:   DefaultLibOtelInjectorPath,
+		ServiceName: unitName,
 	}, nil
 }
 
@@ -47,13 +39,11 @@ func (d *SystemdDropin) applySystemdDropIn() error {
 	content := fmt.Sprintf(`[Service]
 Environment="LD_PRELOAD=%s"
 Environment="OTEL_SERVICE_NAME=%s"
-Environment="OTEL_EXPORTER_OTLP_ENDPOINT=%s"
-Environment="OTEL_EXPORTER_OTLP_HEADERS=%s"
+Environment="OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:9319"
+Environment="OTEL_EXPORTER_OTLP_PROTOCOL=grpc"
 `,
 		shellescape(d.LdPreload),
 		shellescape(d.ServiceName),
-		shellescape(d.ExporterEndpoint),
-		shellescape(d.OtlpHeaders),
 	)
 
 	dropInDir := fmt.Sprintf("/etc/systemd/system/%s.service.d", d.ServiceName)
@@ -89,20 +79,15 @@ func (d *SystemdDropin) applySystemdDropInPython() error {
 Environment="LD_PRELOAD=%s"
 Environment="PYTHON_AUTO_INSTRUMENTATION_AGENT_PATH_PREFIX=%s"
 Environment="OTEL_SERVICE_NAME=%s"
-Environment="OTEL_EXPORTER_OTLP_ENDPOINT=%s"
-Environment="OTEL_EXPORTER_OTLP_HEADERS=%s"
+Environment="OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:9319"
+Environment="OTEL_EXPORTER_OTLP_PROTOCOL=grpc"
 Environment="OTEL_TRACES_EXPORTER=otlp_proto_http"
 Environment="OTEL_METRICS_EXPORTER=otlp_proto_http"
 Environment="OTEL_LOGS_EXPORTER=otlp_proto_http"
-
-# Debug logging
-Environment="OTEL_INJECTOR_LOG_LEVEL=info"
 `,
 		shellescape(d.LdPreload),
 		shellescape(DefaultPythonAgentBasePath),
 		shellescape(d.ServiceName),
-		shellescape(d.ExporterEndpoint),
-		shellescape(d.OtlpHeaders),
 	)
 
 	dropInDir := fmt.Sprintf("/etc/systemd/system/%s.service.d", d.ServiceName)
@@ -139,10 +124,8 @@ func (d *SystemdDropin) validate() error {
 
 	forbidden := []string{"\n", "\r", "\""}
 	fields := map[string]string{
-		"ServiceName":      d.ServiceName,
-		"LdPreload":        d.LdPreload,
-		"ExporterEndpoint": d.ExporterEndpoint,
-		"OtlpHeaders":      d.OtlpHeaders,
+		"ServiceName": d.ServiceName,
+		"LdPreload":   d.LdPreload,
 	}
 
 	for name, value := range fields {
