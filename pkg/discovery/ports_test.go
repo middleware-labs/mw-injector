@@ -146,6 +146,49 @@ func TestAttachListenersDedup(t *testing.T) {
 	}
 }
 
+func TestSplitCmdline(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+		want []string
+	}{
+		{
+			name: "null-separated args",
+			data: []byte("node\x00/usr/bin/pm2-runtime\x00app.js\x00-i\x00max\x00"),
+			want: []string{"node", "/usr/bin/pm2-runtime", "app.js", "-i", "max"},
+		},
+		{
+			name: "god daemon rewritten argv",
+			data: []byte("PM2 v6.0.14: God Daemon (/home/user/.pm2)\x00"),
+			want: []string{"PM2 v6.0.14: God Daemon (/home/user/.pm2)"},
+		},
+		{
+			name: "empty",
+			data: []byte{},
+			want: nil,
+		},
+		{
+			name: "single null",
+			data: []byte("\x00"),
+			want: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := splitCmdline(tc.data)
+			if len(got) != len(tc.want) {
+				t.Fatalf("len = %d, want %d; got %v", len(got), len(tc.want), got)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("[%d] = %q, want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
 // TestListListenersSelf binds a TCP port in the test process and verifies
 // ListListeners reports it. Skips if /proc isn't available.
 func TestListListenersSelf(t *testing.T) {

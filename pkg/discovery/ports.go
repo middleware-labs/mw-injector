@@ -167,8 +167,35 @@ func isPM2Daemon(pid int32) bool {
 	if err != nil || len(data) == 0 {
 		return false
 	}
-	fields := strings.Fields(strings.TrimRight(string(data), "\x00"))
-	return len(fields) > 0 && strings.ToLower(fields[0]) == "pm2"
+	args := splitCmdline(data)
+	if len(args) == 0 {
+		return false
+	}
+	// God Daemon rewrites argv[0] to "PM2 v6.x.x: God Daemon (...)".
+	// After null-split that's a single field; re-split on spaces to get "PM2".
+	if first := strings.ToLower(strings.Fields(args[0])[0]); first == "pm2" {
+		return true
+	}
+	// pm2-runtime / pm2-dev launched as "node /path/pm2-runtime ..." —
+	// argv[0] is "node", check the first positional argument's basename.
+	for _, arg := range args[1:] {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return pm2Binaries[strings.ToLower(filepath.Base(arg))]
+	}
+	return false
+}
+
+func splitCmdline(data []byte) []string {
+	raw := strings.Split(strings.TrimRight(string(data), "\x00"), "\x00")
+	args := raw[:0]
+	for _, s := range raw {
+		if s != "" {
+			args = append(args, s)
+		}
+	}
+	return args
 }
 
 // readNetnsInode returns the netns inode for a PID via readlink on
