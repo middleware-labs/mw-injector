@@ -139,9 +139,6 @@ func (p *Process) Fingerprint() string {
 	if p.ContainerInfo != nil && p.ContainerInfo.ContainerName != "" {
 		parts = append(parts, p.ContainerInfo.ContainerName)
 	}
-	if name := p.DetailString(DetailExplicitServiceName); name != "" {
-		parts = append(parts, name)
-	}
 
 	switch p.Language {
 	case LangJava:

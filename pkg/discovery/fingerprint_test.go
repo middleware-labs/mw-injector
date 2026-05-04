@@ -162,7 +162,7 @@ func TestFingerprint(t *testing.T) {
 			wantEqual: false,
 		},
 		{
-			name: "explicit service name affects fingerprint",
+			name: "explicit service name does not affect fingerprint",
 			procA: makeProcess(discovery.LangNode, map[string]any{
 				"entry_point":           "index.js",
 				"working_directory":     "/opt/app",
@@ -172,7 +172,7 @@ func TestFingerprint(t *testing.T) {
 				"entry_point":       "index.js",
 				"working_directory": "/opt/app",
 			}),
-			wantEqual: false,
+			wantEqual: true,
 		},
 		{
 			name: "cross-language non-collision",
