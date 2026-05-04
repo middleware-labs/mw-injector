@@ -117,6 +117,17 @@ func ListListeners(pid int32) []Listener {
 // one fingerprint (single-app daemon). With multiple apps on one daemon,
 // we can't tell which port belongs to which app.
 func InheritParentPorts(procs []*Process) {
+	inheritParentPortsWith(procs, isPM2Daemon, ListListeners)
+}
+
+// inheritParentPortsWith contains the core logic of InheritParentPorts with
+// injectable dependencies for testing. checkPM2 determines whether a parent
+// PID is a PM2 daemon; getListeners returns the parent's listen sockets.
+func inheritParentPortsWith(
+	procs []*Process,
+	checkPM2 func(int32) bool,
+	getListeners func(int32) []Listener,
+) {
 	type parentGroup struct {
 		children     []*Process
 		fingerprints map[string]struct{}
@@ -143,13 +154,13 @@ func InheritParentPorts(procs []*Process) {
 	}
 
 	for ppid, g := range groups {
-		if !isPM2Daemon(ppid) {
+		if !checkPM2(ppid) {
 			continue
 		}
 		if len(g.fingerprints) > 1 {
 			continue
 		}
-		parentListeners := ListListeners(ppid)
+		parentListeners := getListeners(ppid)
 		if len(parentListeners) == 0 {
 			continue
 		}
@@ -167,7 +178,12 @@ func isPM2Daemon(pid int32) bool {
 	if err != nil || len(data) == 0 {
 		return false
 	}
-	args := splitCmdline(data)
+	return isPM2CmdLine(splitCmdline(data))
+}
+
+// isPM2CmdLine returns true if the parsed command-line arguments belong to
+// a PM2 daemon process. Separated from isPM2Daemon for testability.
+func isPM2CmdLine(args []string) bool {
 	if len(args) == 0 {
 		return false
 	}

@@ -105,3 +105,100 @@ func TestExtractNodeInfoNoPackageJson(t *testing.T) {
 		t.Errorf("DetailPackageName = %q, want empty", got)
 	}
 }
+
+func TestNodeToServiceSettingServiceType(t *testing.T) {
+	h := &NodeHandler{}
+
+	// Use a fake PID that won't match any real systemd cgroup, so
+	// CheckSystemdStatus returns (false, "") → serviceType = "system".
+	const fakePID int32 = 999999
+
+	t.Run("plain system process gets system type", func(t *testing.T) {
+		proc := &Process{
+			PID:         fakePID,
+			Language:    LangNode,
+			ServiceName: "my-app",
+			Details:     make(map[string]any),
+		}
+		ss := h.ToServiceSetting(proc)
+		if ss.ServiceType != "system" {
+			t.Errorf("ServiceType = %q, want %q", ss.ServiceType, "system")
+		}
+	})
+
+	t.Run("PM2 process gets system type not pm2", func(t *testing.T) {
+		proc := &Process{
+			PID:         fakePID,
+			Language:    LangNode,
+			ServiceName: "my-app",
+			Details: map[string]any{
+				DetailIsPM2:          true,
+				DetailProcessManager: "pm2",
+			},
+		}
+		ss := h.ToServiceSetting(proc)
+		if ss.ServiceType != "system" {
+			t.Errorf("ServiceType = %q, want %q (PM2 should not override)", ss.ServiceType, "system")
+		}
+	})
+
+	t.Run("forever process gets system type not forever", func(t *testing.T) {
+		proc := &Process{
+			PID:         fakePID,
+			Language:    LangNode,
+			ServiceName: "my-app",
+			Details: map[string]any{
+				DetailIsForever:      true,
+				DetailProcessManager: "forever",
+			},
+		}
+		ss := h.ToServiceSetting(proc)
+		if ss.ServiceType != "system" {
+			t.Errorf("ServiceType = %q, want %q (forever should not override)", ss.ServiceType, "system")
+		}
+	})
+
+	t.Run("containerized process gets docker type", func(t *testing.T) {
+		proc := &Process{
+			PID:         fakePID,
+			Language:    LangNode,
+			ServiceName: "my-app",
+			ContainerInfo: &ContainerInfo{
+				IsContainer:   true,
+				ContainerID:   "abcdef1234567890",
+				ContainerName: "my-container",
+				Runtime:       "docker",
+			},
+			Details: make(map[string]any),
+		}
+		ss := h.ToServiceSetting(proc)
+		if ss.ServiceType != "docker" {
+			t.Errorf("ServiceType = %q, want %q", ss.ServiceType, "docker")
+		}
+		if ss.ServiceName != "my-container" {
+			t.Errorf("ServiceName = %q, want %q", ss.ServiceName, "my-container")
+		}
+	})
+
+	t.Run("containerized PM2 process gets docker type not pm2", func(t *testing.T) {
+		proc := &Process{
+			PID:         fakePID,
+			Language:    LangNode,
+			ServiceName: "my-app",
+			ContainerInfo: &ContainerInfo{
+				IsContainer:   true,
+				ContainerID:   "abcdef1234567890",
+				ContainerName: "pm2-container",
+				Runtime:       "docker",
+			},
+			Details: map[string]any{
+				DetailIsPM2:          true,
+				DetailProcessManager: "pm2",
+			},
+		}
+		ss := h.ToServiceSetting(proc)
+		if ss.ServiceType != "docker" {
+			t.Errorf("ServiceType = %q, want %q (container overrides PM2)", ss.ServiceType, "docker")
+		}
+	})
+}
