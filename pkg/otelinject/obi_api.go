@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"runtime"
 	"sort"
+	"time"
 
 	"github.com/middleware-labs/java-injector/pkg/discovery"
 )
@@ -24,6 +25,10 @@ func InstrumentOBI(identifier string, lang Language, logger *slog.Logger) error 
 	}
 
 	setting.Listeners = collectPortsForFingerprint(setting.Fingerprint, allSettings)
+	if len(setting.Listeners) == 0 {
+		pids := collectPIDsForFingerprint(setting.Fingerprint, allSettings)
+		setting.Listeners = awaitListeners(pids, logger)
+	}
 	setting.InstrumentationType = "obi"
 	strategy := NewOBIStrategyWithLogger(logger)
 
@@ -92,6 +97,10 @@ func InstrumentOBIBulk(lang Language, logger *slog.Logger) error {
 	for _, fp := range order {
 		g := groups[fp]
 		g.representative.Listeners = collectPortsForFingerprint(fp, settings)
+		if len(g.representative.Listeners) == 0 {
+			pids := collectPIDsForFingerprint(fp, settings)
+			g.representative.Listeners = awaitListeners(pids, logger)
+		}
 
 		sel := buildOBISelector(g.representative, lang)
 		overwritten, err := cfg.AddSelector(sel)
@@ -214,6 +223,71 @@ func collectFingerprints(settings []discovery.ServiceSetting) string {
 		}
 	}
 	return fmt.Sprintf("%v", fps)
+}
+
+// collectPIDsForFingerprint returns all unique PIDs from settings that share
+// the given fingerprint.
+func collectPIDsForFingerprint(fp string, all []discovery.ServiceSetting) []int32 {
+	seen := make(map[int32]struct{})
+	var pids []int32
+	for _, s := range all {
+		if s.Fingerprint != fp || s.PID <= 0 {
+			continue
+		}
+		if _, ok := seen[s.PID]; !ok {
+			seen[s.PID] = struct{}{}
+			pids = append(pids, s.PID)
+		}
+	}
+	return pids
+}
+
+// awaitListeners polls /proc/<pid>/net/* for listening sockets across the
+// given PIDs. Used when initial discovery found no ports — typically because
+// a process was just restarted and hasn't bound its socket yet.
+func awaitListeners(pids []int32, logger *slog.Logger) []discovery.Listener {
+	if len(pids) == 0 {
+		return nil
+	}
+
+	const (
+		interval = 500 * time.Millisecond
+		timeout  = 15 * time.Second
+	)
+
+	if logger != nil {
+		logger.Info("no ports detected, waiting for process to bind", "pids", pids, "timeout", timeout)
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(interval)
+
+		seen := make(map[uint16]struct{})
+		var listeners []discovery.Listener
+		for _, pid := range pids {
+			for _, l := range discovery.ListListeners(pid) {
+				if _, ok := seen[l.Port]; !ok {
+					seen[l.Port] = struct{}{}
+					listeners = append(listeners, l)
+				}
+			}
+		}
+		if len(listeners) > 0 {
+			sort.Slice(listeners, func(i, j int) bool {
+				return listeners[i].Port < listeners[j].Port
+			})
+			if logger != nil {
+				logger.Info("ports detected after waiting", "listeners", listeners)
+			}
+			return listeners
+		}
+	}
+
+	if logger != nil {
+		logger.Warn("timed out waiting for ports to bind", "pids", pids)
+	}
+	return nil
 }
 
 // discoverServiceSettings runs the discovery pipeline and converts the results
