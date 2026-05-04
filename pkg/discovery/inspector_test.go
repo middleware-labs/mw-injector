@@ -250,7 +250,13 @@ func TestIsNodeLauncher(t *testing.T) {
 		{"space-joined pnpm start", []string{"pnpm start"}, true},
 		{"pm2 god daemon rewritten argv", []string{"PM2 v6.0.14: God Daemon (/home/user/.pm2)"}, true},
 		{"pm2 null-separated", []string{"pm2", "start", "app.js"}, true},
+		{"node running pm2-runtime script", []string{"node", "/usr/local/bin/pm2-runtime", "ecosystem.config.js"}, true},
+		{"node running pm2-dev script", []string{"node", "/usr/local/lib/node_modules/pm2/bin/pm2-dev", "app.js"}, true},
+		{"node running pm2 binary directly", []string{"node", "/usr/local/bin/pm2", "start", "app.js"}, true},
+		{"node with flags before pm2-runtime", []string{"node", "--max-old-space-size=4096", "/usr/local/bin/pm2-runtime", "ecosystem.config.js"}, true},
 		{"actual app process", []string{"node", "server.js"}, false},
+		{"node with flags then app", []string{"node", "--inspect", "/app/server.js"}, false},
+		{"node with only flags", []string{"node", "--inspect"}, false},
 		{"entry point only", []string{"server.js"}, false},
 		{"empty args", []string{}, false},
 	}

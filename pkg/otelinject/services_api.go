@@ -29,6 +29,7 @@ type InstanceInfo struct {
 	PID    int32
 	Owner  string
 	Status string
+	Ports  []int
 }
 
 // DiscoverServicesOpts controls filtering for DiscoverServices.
@@ -88,22 +89,30 @@ func DiscoverServices(opts DiscoverServicesOpts) ([]ServiceEntry, error) {
 
 		if len(setting.Instances) > 0 {
 			for _, ri := range setting.Instances {
-				g.instances = append(g.instances, InstanceInfo{
+				inst := InstanceInfo{
 					PID:    ri.PID,
 					Owner:  ri.Owner,
 					Status: ri.Status,
-				})
+				}
+				for _, l := range ri.Listeners {
+					inst.Ports = append(inst.Ports, int(l.Port))
+					g.ports[int(l.Port)] = struct{}{}
+				}
+				sort.Ints(inst.Ports)
+				g.instances = append(g.instances, inst)
 			}
 		} else {
-			g.instances = append(g.instances, InstanceInfo{
+			inst := InstanceInfo{
 				PID:    setting.PID,
 				Owner:  setting.Owner,
 				Status: setting.Status,
-			})
-		}
-
-		for _, l := range setting.Listeners {
-			g.ports[int(l.Port)] = struct{}{}
+			}
+			for _, l := range setting.Listeners {
+				inst.Ports = append(inst.Ports, int(l.Port))
+				g.ports[int(l.Port)] = struct{}{}
+			}
+			sort.Ints(inst.Ports)
+			g.instances = append(g.instances, inst)
 		}
 	}
 

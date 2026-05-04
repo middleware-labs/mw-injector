@@ -15,9 +15,10 @@ import (
 // ReportInstanceInfo holds per-PID details for an individual process instance.
 // Separate from otelinject.InstanceInfo to avoid a circular import.
 type ReportInstanceInfo struct {
-	PID    int32  `json:"pid"`
-	Owner  string `json:"owner"`
-	Status string `json:"status"`
+	PID       int32      `json:"pid"`
+	Owner     string     `json:"owner"`
+	Status    string     `json:"status"`
+	Listeners []Listener `json:"listeners,omitempty"`
 }
 
 // ServiceSetting represents the detailed status for a single service/process.
@@ -108,9 +109,10 @@ func GetAgentReportValueWithLogger(logger *slog.Logger) (AgentReportValue, error
 				mapKey = ss.Key
 			}
 			inst := ReportInstanceInfo{
-				PID:    ss.PID,
-				Owner:  ss.Owner,
-				Status: ss.Status,
+				PID:       ss.PID,
+				Owner:     ss.Owner,
+				Status:    ss.Status,
+				Listeners: ss.Listeners,
 			}
 			if existing, ok := settings[mapKey]; ok {
 				existing.Instances = append(existing.Instances, inst)

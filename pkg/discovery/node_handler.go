@@ -423,6 +423,16 @@ var nodeLaunchers = map[string]bool{
 	"pm2":      true,
 }
 
+// pm2Binaries lists executable basenames for PM2 entry points. When node
+// runs one of these as a script (e.g. "node /usr/local/bin/pm2-runtime"),
+// the process is a PM2 daemon — not an application. Its listen ports flow
+// to workers via InheritParentPorts.
+var pm2Binaries = map[string]bool{
+	"pm2":         true,
+	"pm2-runtime": true,
+	"pm2-dev":     true,
+}
+
 // isNodeLauncher returns true if the process is a Node.js package manager
 // launcher (npm start, yarn run, etc.) rather than an actual application.
 func isNodeLauncher(cmdArgs []string) bool {
@@ -436,7 +446,22 @@ func isNodeLauncher(cmdArgs []string) bool {
 	if i := strings.IndexByte(first, ' '); i > 0 {
 		first = first[:i]
 	}
-	return nodeLaunchers[first]
+	if nodeLaunchers[first] {
+		return true
+	}
+
+	// When node runs a launcher script (e.g. "node /usr/local/bin/pm2-runtime"),
+	// cmdArgs[0] is "node" which passes the check above. Detect PM2 daemon
+	// processes by checking the first positional argument's basename.
+	for _, arg := range cmdArgs[1:] {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		base := strings.ToLower(filepath.Base(arg))
+		return pm2Binaries[base]
+	}
+
+	return false
 }
 
 // extractNodeServiceNameFromCmdArgs extracts a service name from Node.js

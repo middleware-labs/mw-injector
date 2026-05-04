@@ -185,6 +185,51 @@ func TestAccumulateByFingerprint(t *testing.T) {
 		}
 	})
 
+	t.Run("per-instance listeners preserved during accumulation", func(t *testing.T) {
+		settings := map[string]ServiceSetting{}
+		entries := []ServiceSetting{
+			{
+				PID: 100, ServiceName: "my-app", Fingerprint: "fp-pm2",
+				Owner: "root", Status: "running",
+				Listeners: []Listener{{Port: 3000, Protocol: "tcp6"}},
+			},
+			{
+				PID: 200, ServiceName: "my-app", Fingerprint: "fp-pm2",
+				Owner: "root", Status: "running",
+				Listeners: []Listener{{Port: 3001, Protocol: "tcp6"}},
+			},
+		}
+		for _, ss := range entries {
+			mapKey := ss.Fingerprint
+			inst := ReportInstanceInfo{
+				PID: ss.PID, Owner: ss.Owner, Status: ss.Status,
+				Listeners: ss.Listeners,
+			}
+			if existing, ok := settings[mapKey]; ok {
+				existing.Instances = append(existing.Instances, inst)
+				existing.Listeners = mergeListeners(existing.Listeners, ss.Listeners)
+				settings[mapKey] = existing
+			} else {
+				ss.Instances = []ReportInstanceInfo{inst}
+				settings[mapKey] = ss
+			}
+		}
+
+		entry := settings["fp-pm2"]
+		if len(entry.Listeners) != 2 {
+			t.Fatalf("merged listeners = %d, want 2", len(entry.Listeners))
+		}
+		if len(entry.Instances) != 2 {
+			t.Fatalf("instances = %d, want 2", len(entry.Instances))
+		}
+		if len(entry.Instances[0].Listeners) != 1 || entry.Instances[0].Listeners[0].Port != 3000 {
+			t.Errorf("instance 0 listeners = %v, want [{tcp6 3000}]", entry.Instances[0].Listeners)
+		}
+		if len(entry.Instances[1].Listeners) != 1 || entry.Instances[1].Listeners[0].Port != 3001 {
+			t.Errorf("instance 1 listeners = %v, want [{tcp6 3001}]", entry.Instances[1].Listeners)
+		}
+	})
+
 	t.Run("falls back to Key when Fingerprint empty", func(t *testing.T) {
 		settings := map[string]ServiceSetting{}
 		ss := ServiceSetting{
