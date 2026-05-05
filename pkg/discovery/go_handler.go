@@ -22,11 +22,15 @@ func (h *GoHandler) Lang() Language { return LangGo }
 // build info (module path, Go version) in the binary — reading it is the
 // most reliable detection method since Go binaries have arbitrary exe names.
 // Infrastructure binaries (dockerd, kubelet, etc.) are excluded.
+//
+// Uses /proc/<pid>/exe directly instead of the readlink result because
+// containerized processes have exe paths inside their mount namespace
+// (e.g. "/server") that don't exist on the host filesystem.
 func (h *GoHandler) Detect(proc *ProcessInfo) bool {
 	if isIgnoredGoBinary(proc.ExeName) {
 		return false
 	}
-	_, err := buildinfo.ReadFile(proc.ExePath)
+	_, err := buildinfo.ReadFile(fmt.Sprintf("/proc/%d/exe", proc.PID))
 	return err == nil
 }
 
@@ -191,7 +195,7 @@ func (h *GoHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 // --- Private helpers ---
 
 func (h *GoHandler) extractGoInfo(proc *Process, info *ProcessInfo) {
-	bi, err := buildinfo.ReadFile(info.ExePath)
+	bi, err := buildinfo.ReadFile(fmt.Sprintf("/proc/%d/exe", proc.PID))
 	if err != nil {
 		return
 	}
@@ -307,6 +311,7 @@ var goIgnoredBinaries = map[string]bool{
 	"otelcol":         true,
 	"otelcol-contrib": true,
 	"mw-injector":     true,
+	"esbuild":         true,
 	"gopls":           true,
 	"dlv":             true,
 	"staticcheck":     true,
