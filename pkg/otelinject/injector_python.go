@@ -1,3 +1,7 @@
+// injector_python.go implements OtelInjector for Python processes. It discovers
+// running Python processes via the discovery package, validates the Python OTel
+// agent installation, and instruments/uninstruments them via systemd drop-in
+// files with Python-specific environment variables (PYTHON_AUTO_INSTRUMENTATION_AGENT_PATH_PREFIX).
 package otelinject
 
 import (
@@ -18,15 +22,15 @@ type PythonAgentStatus struct {
 }
 
 type PythonSystemdInjector struct {
-	PythonProcs []discovery.PythonProcess
+	PythonProcs []*discovery.Process
 	Status      PythonAgentStatus
 }
 
 func NewPythonSystemdInjector() (*PythonSystemdInjector, error) {
 	ctx := context.Background()
-	pythonProcs, err := discovery.FindAllPythonProcess(ctx)
+	pythonProcs, err := discovery.FindProcessesByLanguage(ctx, discovery.LangPython)
 	if err != nil {
-		return nil, fmt.Errorf("Error in creating PythonSystemdInjector: %w", err)
+		return nil, fmt.Errorf("error creating PythonSystemdInjector: %w", err)
 	}
 
 	ret := &PythonSystemdInjector{
@@ -51,19 +55,18 @@ func (p *PythonSystemdInjector) Instrument() error {
 		return errs
 	}
 
-	// 1. DEDUPLICATION MAP
-	// Track which units we have already instrumented in this run to prevent
-	// cascading restarts for multi-process apps (e.g. Gunicorn w/ 4 workers).
+	// Dedup by unit name to prevent cascading restarts for multi-process
+	// apps (e.g. Gunicorn with 4 workers sharing one systemd unit).
 	processedUnits := make(map[string]bool)
 	for _, proc := range p.PythonProcs {
-		isSystemd, unitName := discovery.CheckSystemdStatus(proc.ProcessPID)
+		isSystemd, unitName := discovery.CheckSystemdStatus(proc.PID)
 
 		if !isSystemd {
 			continue
 		}
 
 		if processedUnits[unitName] {
-			continue // We already handled this service, skip this worker PID
+			continue
 		}
 
 		processedUnits[unitName] = true
@@ -74,7 +77,7 @@ func (p *PythonSystemdInjector) Instrument() error {
 				errs,
 				fmt.Errorf(
 					"failed to create systemd dropin for %d-%s: %w",
-					proc.ProcessPID,
+					proc.PID,
 					unitName,
 					err,
 				),
@@ -87,7 +90,7 @@ func (p *PythonSystemdInjector) Instrument() error {
 				errs,
 				fmt.Errorf(
 					"failed to apply systemd dropin for %d-%s: %w",
-					proc.ProcessPID,
+					proc.PID,
 					unitName,
 					err,
 				),
@@ -103,7 +106,7 @@ func (p *PythonSystemdInjector) Uninstrument() error {
 	var errs error
 	processedUnits := make(map[string]bool)
 	for _, proc := range p.PythonProcs {
-		isSystemd, unitName := discovery.CheckSystemdStatus(proc.ProcessPID)
+		isSystemd, unitName := discovery.CheckSystemdStatus(proc.PID)
 		if !isSystemd {
 			continue
 		}
@@ -116,7 +119,7 @@ func (p *PythonSystemdInjector) Uninstrument() error {
 				errs,
 				fmt.Errorf(
 					"failed to remove systemd dropin for %d-%s: %w",
-					proc.ProcessPID,
+					proc.PID,
 					unitName,
 					err,
 				),
@@ -127,11 +130,11 @@ func (p *PythonSystemdInjector) Uninstrument() error {
 }
 
 func (p *PythonSystemdInjector) InstrumentService(service discovery.ServiceSetting) error {
-	pythonProcToInstrument := p.getPythonProcToInstrument(service.PID)
-	if pythonProcToInstrument == nil {
+	proc := p.getProcToInstrument(service.PID)
+	if proc == nil {
 		return fmt.Errorf("could not find python process: %v running on the host", service)
 	}
-	isSystemd, unitName := discovery.CheckSystemdStatus(pythonProcToInstrument.ProcessPID)
+	isSystemd, unitName := discovery.CheckSystemdStatus(proc.PID)
 	if !isSystemd {
 		return fmt.Errorf("given python process is not a systemd process: %v", service)
 	}
@@ -151,10 +154,10 @@ func (p *PythonSystemdInjector) InstrumentService(service discovery.ServiceSetti
 	return nil
 }
 
-func (p *PythonSystemdInjector) getPythonProcToInstrument(pid int32) *discovery.PythonProcess {
+func (p *PythonSystemdInjector) getProcToInstrument(pid int32) *discovery.Process {
 	for _, proc := range p.PythonProcs {
-		if proc.ProcessPID == pid {
-			return &proc
+		if proc.PID == pid {
+			return proc
 		}
 	}
 	return nil

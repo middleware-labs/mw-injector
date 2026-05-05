@@ -1,3 +1,6 @@
+// scanner.go reads /proc to enumerate running processes and parse their
+// command line, executable path, and arguments into ProcessInfo structs.
+// This is the first phase of the discovery pipeline.
 package discovery
 
 import (

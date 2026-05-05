@@ -1,3 +1,6 @@
+// Package config reads Middleware.io environment variable configuration
+// (~20 MW_* env vars) into a ProcessConfiguration struct. These settings
+// control API keys, target URLs, log levels, and telemetry collection options.
 package config
 
 import (

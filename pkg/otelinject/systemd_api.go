@@ -1,3 +1,7 @@
+// systemd_api.go provides the high-level API for instrumenting systemd units.
+// It includes InstrumentUnit (instruments a single unit by language),
+// ListSystemdServices (discovers instrumentable units), and ReportStatus
+// (builds a status report of all discoverable services).
 package otelinject
 
 import (

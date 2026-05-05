@@ -1,5 +1,14 @@
 // Package discovery provides process discovery and instrumentation detection
-// capabilities following OpenTelemetry semantic conventions.
+// for Java, Node.js, and Python processes on Linux hosts.
+//
+// The discovery pipeline works in four phases:
+//  1. Scan: Read /proc to enumerate running processes (scanner.go)
+//  2. Classify: Match each process to a language via HandlerRegistry (registry.go)
+//  3. Enrich: Populate Process structs with language-specific metadata (java/node/python_handler.go)
+//  4. Filter: Apply user criteria (owner, agent presence) to select relevant processes
+//
+// Adding a new language requires implementing LanguageHandler and registering it
+// in NewHandlerRegistry — no changes to the core pipeline.
 package discovery
 
 import (
@@ -10,73 +19,7 @@ import (
 	"time"
 )
 
-// JavaProcess represents a discovered Java process with OTEL semantic convention compliance
-type JavaProcess struct {
-	// OTEL Process semantic conventions
-	ProcessPID            int32     `json:"process.pid"`
-	ProcessParentPID      int32     `json:"process.parent_pid"`
-	ProcessExecutableName string    `json:"process.executable.name"`
-	ProcessExecutablePath string    `json:"process.executable.path"`
-	ProcessCommand        string    `json:"process.command"`
-	ProcessCommandLine    string    `json:"process.command_line"`
-	ProcessCommandArgs    []string  `json:"process.command_args"`
-	ProcessOwner          string    `json:"process.owner"`
-	ProcessCreateTime     time.Time `json:"process.create_time"`
-
-	// OTEL Process Runtime semantic conventions
-	ProcessRuntimeName        string `json:"process.runtime.name"`
-	ProcessRuntimeVersion     string `json:"process.runtime.version"`
-	ProcessRuntimeDescription string `json:"process.runtime.description"`
-
-	// Java-specific information
-	JarFile    string   `json:"java.jar.file,omitempty"`
-	JarPath    string   `json:"java.jar.path,omitempty"`
-	MainClass  string   `json:"java.main.class,omitempty"`
-	JVMOptions []string `json:"java.jvm.options,omitempty"`
-
-	// Instrumentation detection
-	HasJavaAgent      bool   `json:"java.agent.present"`
-	JavaAgentPath     string `json:"java.agent.path,omitempty"`
-	JavaAgentName     string `json:"java.agent.name,omitempty"`
-	IsMiddlewareAgent bool   `json:"middleware.agent.detected"`
-
-	// Service identification
-	ServiceName string `json:"service.name,omitempty"`
-
-	// Process metrics
-	MemoryPercent float32 `json:"process.memory.percent"`
-	CPUPercent    float64 `json:"process.cpu.percent"`
-	Status        string  `json:"process.status"`
-
-	ContainerInfo *ContainerInfo `json:"container_info,omitempty"`
-}
-
-func (jp *JavaProcess) IsInContainer() bool {
-	return jp.ContainerInfo != nil && jp.ContainerInfo.IsContainer
-}
-
-func (jp *JavaProcess) GetContainerRuntime() string {
-	if jp.ContainerInfo != nil {
-		return jp.ContainerInfo.Runtime
-	}
-	return ""
-}
-
-func (jp *JavaProcess) GetContainerID() string {
-	if jp.ContainerInfo != nil {
-		return jp.ContainerInfo.ContainerID
-	}
-	return ""
-}
-
-func (jp *JavaProcess) GetContainerName() string {
-	if jp.ContainerInfo != nil {
-		return jp.ContainerInfo.ContainerName
-	}
-	return ""
-}
-
-// DiscoveryOptions configures the discovery behavior
+// DiscoveryOptions configures the discovery behavior.
 type DiscoveryOptions struct {
 	MaxConcurrency       int           `json:"max_concurrency"`
 	Timeout              time.Duration `json:"timeout"`
@@ -85,7 +28,7 @@ type DiscoveryOptions struct {
 	IncludeContainerInfo bool          `json:"include_container_info"`
 }
 
-// ProcessFilter defines filtering criteria for process discovery
+// ProcessFilter defines filtering criteria for process discovery.
 type ProcessFilter struct {
 	IncludeUsers     []string `json:"include_users,omitempty"`
 	ExcludeUsers     []string `json:"exclude_users,omitempty"`
@@ -94,7 +37,7 @@ type ProcessFilter struct {
 	HasMWAgentOnly   bool     `json:"has_mw_agent_only"`
 }
 
-// AgentType represents the type of Java agent detected
+// AgentType represents the type of agent detected on a process.
 type AgentType int
 
 const (
@@ -104,7 +47,7 @@ const (
 	AgentOther
 )
 
-// AgentInfo contains details about a detected Java agent
+// AgentInfo contains details about a detected agent.
 type AgentInfo struct {
 	Type         AgentType `json:"type"`
 	Path         string    `json:"path"`
@@ -128,7 +71,7 @@ func (a AgentType) String() string {
 	}
 }
 
-// DefaultDiscoveryOptions returns sensible defaults for process discovery
+// DefaultDiscoveryOptions returns sensible defaults for process discovery.
 func DefaultDiscoveryOptions() DiscoveryOptions {
 	return DiscoveryOptions{
 		MaxConcurrency: 10,
@@ -137,13 +80,13 @@ func DefaultDiscoveryOptions() DiscoveryOptions {
 	}
 }
 
-// --- discoverer (new implementation using scanner + inspectors) ---
+// --- discoverer ---
 
 type discoverer struct {
 	ctx               context.Context
 	opts              DiscoveryOptions
 	containerDetector *ContainerDetector
-	langRegistry      *LanguageRegistry
+	handlerRegistry   *HandlerRegistry
 	allProcesses      []ProcessInfo // scanned once via ScanProcesses()
 }
 
@@ -165,7 +108,7 @@ func NewDiscovererWithOptions(ctx context.Context, opts DiscoveryOptions) (*disc
 		ctx:               ctx,
 		opts:              opts,
 		containerDetector: NewContainerDetector(),
-		langRegistry:      NewLanguageRegistry(),
+		handlerRegistry:   NewHandlerRegistry(),
 		allProcesses:      allProcs,
 	}, nil
 }
@@ -176,50 +119,30 @@ func (d *discoverer) Close() error {
 
 // --- Single-pass classification ---
 
-type classifiedProcess struct {
-	info *ProcessInfo
-	lang Language
-}
-
-// classifyAll runs every scanned process through the language registry and
-// returns them grouped by language. This is the "Phase 2" of the pipeline.
+// classifyAll runs every scanned process through the handler registry and
+// returns them grouped by language. The first handler whose Detect returns
+// true wins (same as mw-lang-detector's DetectLanguage pattern).
 func (d *discoverer) classifyAll() map[Language][]ProcessInfo {
 	grouped := make(map[Language][]ProcessInfo)
 	for i := range d.allProcesses {
-		if lang, ok := d.langRegistry.Detect(&d.allProcesses[i]); ok {
+		if lang, ok := d.handlerRegistry.Detect(&d.allProcesses[i]); ok {
 			grouped[lang] = append(grouped[lang], d.allProcesses[i])
 		}
 	}
 	return grouped
 }
 
-// --- Java discovery ---
+// --- Generic enrichment worker pool ---
 
-func (d *discoverer) DiscoverJavaProcesses(ctx context.Context) ([]JavaProcess, error) {
-	return d.DiscoverWithOptions(ctx, d.opts)
-}
-
-func (d *discoverer) DiscoverWithOptions(ctx context.Context, opts DiscoveryOptions) ([]JavaProcess, error) {
-	var cancel context.CancelFunc
-	if opts.Timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
-		defer cancel()
-	}
-
-	// Classify all processes, then take only Java
-	grouped := d.classifyAll()
-	javaInfos := grouped[LangJava]
-
-	return d.enrichJavaWithWorkerPool(ctx, javaInfos, opts)
-}
-
-func (d *discoverer) enrichJavaWithWorkerPool(ctx context.Context, infos []ProcessInfo, opts DiscoveryOptions) ([]JavaProcess, error) {
+// enrichWithWorkerPool runs the handler's Enrich and PassesFilter methods
+// across a concurrent worker pool for a set of classified processes.
+func (d *discoverer) enrichWithWorkerPool(ctx context.Context, infos []ProcessInfo, handler LanguageHandler, opts DiscoveryOptions) ([]*Process, error) {
 	if len(infos) == 0 {
-		return []JavaProcess{}, nil
+		return []*Process{}, nil
 	}
 
 	type result struct {
-		proc *JavaProcess
+		proc *Process
 		err  error
 	}
 
@@ -236,12 +159,15 @@ func (d *discoverer) enrichJavaWithWorkerPool(ctx context.Context, infos []Proce
 			for info := range jobs {
 				select {
 				case <-ctx.Done():
-					results <- result{nil, ctx.Err()}
 					return
 				default:
 				}
-				jp := enrichJavaProcess(info, opts, d.containerDetector)
-				results <- result{jp, nil}
+				proc := handler.Enrich(info, opts, d.containerDetector)
+				select {
+				case results <- result{proc, nil}:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}()
 	}
@@ -262,243 +188,103 @@ func (d *discoverer) enrichJavaWithWorkerPool(ctx context.Context, infos []Proce
 		close(results)
 	}()
 
-	var javaProcesses []JavaProcess
+	var processes []*Process
 	for r := range results {
 		if r.err != nil {
 			continue
 		}
 		if r.proc != nil {
-			if passesJavaFilter(*r.proc, opts.Filter) {
-				javaProcesses = append(javaProcesses, *r.proc)
+			if handler.PassesFilter(r.proc, opts.Filter) {
+				processes = append(processes, r.proc)
 			}
 		}
 	}
 
-	return javaProcesses, nil
+	return processes, nil
 }
 
-// --- Node discovery ---
+// --- Registry-driven discovery ---
 
-func (d *discoverer) DiscoverNodeWithOptions(ctx context.Context, opts DiscoveryOptions) ([]NodeProcess, error) {
+// DiscoverAll classifies and enriches all scanned processes, returning
+// results grouped by language. Each language's handler is used for
+// enrichment and filtering.
+func (d *discoverer) DiscoverAll(ctx context.Context) (map[Language][]*Process, error) {
 	var cancel context.CancelFunc
-	if opts.Timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
+	if d.opts.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, d.opts.Timeout)
 		defer cancel()
 	}
 
 	grouped := d.classifyAll()
-	nodeInfos := grouped[LangNode]
+	result := make(map[Language][]*Process)
 
-	return d.enrichNodeWithWorkerPool(ctx, nodeInfos, opts)
-}
-
-func (d *discoverer) enrichNodeWithWorkerPool(ctx context.Context, infos []ProcessInfo, opts DiscoveryOptions) ([]NodeProcess, error) {
-	if len(infos) == 0 {
-		return []NodeProcess{}, nil
-	}
-
-	type result struct {
-		proc *NodeProcess
-		err  error
-	}
-
-	jobs := make(chan *ProcessInfo, len(infos))
-	results := make(chan result, len(infos))
-
-	numWorkers := workerCount(opts.MaxConcurrency, len(infos))
-
-	var wg sync.WaitGroup
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for info := range jobs {
-				select {
-				case <-ctx.Done():
-					results <- result{nil, ctx.Err()}
-					return
-				default:
-				}
-				np := enrichNodeProcess(info, opts, d.containerDetector)
-				results <- result{np, nil}
-			}
-		}()
-	}
-
-	go func() {
-		defer close(jobs)
-		for i := range infos {
-			select {
-			case jobs <- &infos[i]:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	var nodeProcesses []NodeProcess
-	for r := range results {
-		if r.err != nil {
+	for _, handler := range d.handlerRegistry.Handlers() {
+		lang := handler.Lang()
+		infos := grouped[lang]
+		if len(infos) == 0 {
 			continue
 		}
-		if r.proc != nil {
-			if passesSimpleOwnerFilter(r.proc.ProcessOwner, opts.Filter) {
-				nodeProcesses = append(nodeProcesses, *r.proc)
-			}
+
+		procs, err := d.enrichWithWorkerPool(ctx, infos, handler, d.opts)
+		if err != nil {
+			continue
 		}
+		result[lang] = procs
 	}
 
-	return nodeProcesses, nil
+	return result, nil
 }
 
-// --- Python discovery ---
-
-func (d *discoverer) DiscoverPythonWithOptions(ctx context.Context, opts DiscoveryOptions) ([]PythonProcess, error) {
+// DiscoverByLanguage returns enriched processes for a specific language.
+func (d *discoverer) DiscoverByLanguage(ctx context.Context, lang Language) ([]*Process, error) {
 	var cancel context.CancelFunc
-	if opts.Timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
+	if d.opts.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, d.opts.Timeout)
 		defer cancel()
 	}
 
+	handler := d.handlerRegistry.ForLanguage(lang)
+	if handler == nil {
+		return nil, fmt.Errorf("no handler registered for language: %s", lang)
+	}
+
 	grouped := d.classifyAll()
-	pyInfos := grouped[LangPython]
+	infos := grouped[lang]
 
-	return d.enrichPythonWithWorkerPool(ctx, pyInfos, opts)
+	return d.enrichWithWorkerPool(ctx, infos, handler, d.opts)
 }
 
-func (d *discoverer) enrichPythonWithWorkerPool(ctx context.Context, infos []ProcessInfo, opts DiscoveryOptions) ([]PythonProcess, error) {
-	if len(infos) == 0 {
-		return []PythonProcess{}, nil
-	}
+// --- Public convenience functions ---
 
-	type result struct {
-		proc *PythonProcess
-		err  error
-	}
-
-	jobs := make(chan *ProcessInfo, len(infos))
-	results := make(chan result, len(infos))
-
-	numWorkers := workerCount(opts.MaxConcurrency, len(infos))
-
-	var wg sync.WaitGroup
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for info := range jobs {
-				select {
-				case <-ctx.Done():
-					results <- result{nil, ctx.Err()}
-					return
-				default:
-				}
-				pp := enrichPythonProcess(info, opts, d.containerDetector)
-				results <- result{pp, nil}
-			}
-		}()
-	}
-
-	go func() {
-		defer close(jobs)
-		for i := range infos {
-			select {
-			case jobs <- &infos[i]:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	var pyProcesses []PythonProcess
-	for r := range results {
-		if r.err != nil {
-			continue
-		}
-		if r.proc != nil {
-			if passesSimpleOwnerFilter(r.proc.ProcessOwner, opts.Filter) {
-				pyProcesses = append(pyProcesses, *r.proc)
-			}
-		}
-	}
-
-	return pyProcesses, nil
-}
-
-// --- RefreshProcess (preserved for interface compatibility) ---
-
-func (d *discoverer) RefreshProcess(ctx context.Context, pid int32) (*JavaProcess, error) {
-	info, ok := readProcDetails(pid)
-	if !ok {
-		return nil, fmt.Errorf("process %d not found", pid)
-	}
-
-	if lang, ok := d.langRegistry.Detect(&info); !ok || lang != LangJava {
-		return nil, fmt.Errorf("process %d is not a Java process", pid)
-	}
-
-	jp := enrichJavaProcess(&info, d.opts, d.containerDetector)
-	if jp == nil {
-		return nil, fmt.Errorf("failed to enrich PID %d", pid)
-	}
-
-	return jp, nil
-}
-
-// --- Public convenience functions (preserved signatures) ---
-
-func FindAllJavaProcesses(ctx context.Context) ([]JavaProcess, error) {
+// FindAllProcesses discovers all supported language processes, grouped by language.
+func FindAllProcesses(ctx context.Context) (map[Language][]*Process, error) {
 	opts := DefaultDiscoveryOptions()
 	opts.ExcludeContainers = false
 	opts.IncludeContainerInfo = true
 
-	d, err := NewDiscoverer(ctx, opts)
+	d, err := NewDiscovererWithOptions(ctx, opts)
 	if err != nil {
-		return nil, fmt.Errorf("error in finding all java processes: %w", err)
+		return nil, fmt.Errorf("error discovering processes: %w", err)
 	}
 	defer d.Close()
 
-	return d.DiscoverWithOptions(ctx, opts)
+	return d.DiscoverAll(ctx)
 }
 
-func FindAllNodeProcesses(ctx context.Context) ([]NodeProcess, error) {
+// FindProcessesByLanguage discovers processes for a specific language.
+func FindProcessesByLanguage(ctx context.Context, lang Language) ([]*Process, error) {
 	opts := DefaultDiscoveryOptions()
 	opts.ExcludeContainers = false
 	opts.IncludeContainerInfo = true
 
-	d, err := NewDiscoverer(ctx, opts)
+	d, err := NewDiscovererWithOptions(ctx, opts)
 	if err != nil {
-		return nil, fmt.Errorf("error in finding all node processes: %w", err)
+		return nil, fmt.Errorf("error discovering %s processes: %w", lang, err)
 	}
 	defer d.Close()
 
-	return d.DiscoverNodeWithOptions(ctx, opts)
+	return d.DiscoverByLanguage(ctx, lang)
 }
-
-func FindAllPythonProcess(ctx context.Context) ([]PythonProcess, error) {
-	opts := DefaultDiscoveryOptions()
-	opts.ExcludeContainers = false
-	opts.IncludeContainerInfo = true
-
-	d, err := NewDiscoverer(ctx, opts)
-	if err != nil {
-		return nil, fmt.Errorf("error in finding all python processes: %w", err)
-	}
-	defer d.Close()
-
-	return d.DiscoverPythonWithOptions(ctx, opts)
-}
-
 
 // --- Helpers ---
 
@@ -511,53 +297,6 @@ func workerCount(maxConcurrency, total int) int {
 		n = total
 	}
 	return n
-}
-
-func passesJavaFilter(proc JavaProcess, filter ProcessFilter) bool {
-	if filter.CurrentUserOnly {
-		// Use readProcessOwner of current process (pid 0 → self)
-		// but simpler: compare with $USER
-		if proc.ProcessOwner != currentUser() {
-			return false
-		}
-	}
-
-	if len(filter.IncludeUsers) > 0 {
-		found := false
-		for _, u := range filter.IncludeUsers {
-			if proc.ProcessOwner == u {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-
-	if len(filter.ExcludeUsers) > 0 {
-		for _, u := range filter.ExcludeUsers {
-			if proc.ProcessOwner == u {
-				return false
-			}
-		}
-	}
-
-	if filter.HasJavaAgentOnly && !proc.HasJavaAgent {
-		return false
-	}
-	if filter.HasMWAgentOnly && !proc.IsMiddlewareAgent {
-		return false
-	}
-
-	return true
-}
-
-func passesSimpleOwnerFilter(owner string, filter ProcessFilter) bool {
-	if filter.CurrentUserOnly {
-		return owner == currentUser()
-	}
-	return true
 }
 
 func currentUser() string {
