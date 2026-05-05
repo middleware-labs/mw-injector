@@ -93,17 +93,11 @@ func (h *JavaHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 			if opts.ExcludeContainers && containerInfo.IsContainer {
 				return nil
 			}
-
-			if containerInfo.IsContainer && containerInfo.ContainerID != "" {
-				name := detector.GetContainerNameByID(containerInfo.ContainerID, containerInfo.Runtime)
-				if name != "" {
-					proc.ContainerInfo.ContainerName = strings.TrimPrefix(name, "/")
-				}
-			}
 		}
 	}
 
 	h.extractJavaInfo(proc, cmdArgs)
+	enrichCommonDetails(proc)
 	h.extractServiceName(proc, cmdArgs)
 	h.detectTomcat(proc, cmdArgs)
 	h.detectInstrumentation(proc, cmdArgs)
@@ -163,6 +157,9 @@ func (h *JavaHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 	deploymentType := "standalone"
 	if proc.IsInContainer() {
 		deploymentType = "docker"
+		if proc.ContainerInfo.ContainerID != "" && len(proc.ContainerInfo.ContainerID) >= 12 {
+			key = fmt.Sprintf("docker-java-%s", proc.ContainerInfo.ContainerID[:12])
+		}
 	} else if isSystemd {
 		deploymentType = "systemd"
 	}
@@ -187,6 +184,8 @@ func (h *JavaHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 		Instrumented:      proc.HasAgent,
 		Key:               key,
 		SystemdUnit:       unitname,
+		Listeners:         proc.Listeners(),
+		Fingerprint:       proc.Fingerprint(),
 	}
 }
 
@@ -391,36 +390,34 @@ func extractFromJavaSystemProperties(cmdArgs []string) string {
 	return ""
 }
 
-// extractNameFromJar derives a service name from a JAR filename by stripping
-// version suffixes, SNAPSHOT markers, and build identifiers.
-func extractNameFromJar(jarFile string) string {
+var jarVersionPatterns = []struct {
+	re  *regexp.Regexp
+	rep string
+}{
+	{regexp.MustCompile(`-\d+\.\d+\.\d+.*$`), ""},
+	{regexp.MustCompile(`-\d+\.\d+.*$`), ""},
+	{regexp.MustCompile(`_\d+\.\d+\.\d+.*$`), ""},
+	{regexp.MustCompile(`_\d+\.\d+.*$`), ""},
+	{regexp.MustCompile(`-SNAPSHOT$`), ""},
+	{regexp.MustCompile(`_SNAPSHOT$`), ""},
+	{regexp.MustCompile(`-BUILD-\d+$`), ""},
+	{regexp.MustCompile(`_BUILD_\d+$`), ""},
+}
+
+func stripJarVersion(jarFile string) string {
 	if jarFile == "" {
 		return ""
 	}
-
 	baseName := filepath.Base(jarFile)
-	nameNoExt := strings.TrimSuffix(baseName, filepath.Ext(baseName))
-
-	patterns := []struct {
-		re  *regexp.Regexp
-		rep string
-	}{
-		{regexp.MustCompile(`-\d+\.\d+\.\d+.*$`), ""},
-		{regexp.MustCompile(`-\d+\.\d+.*$`), ""},
-		{regexp.MustCompile(`_\d+\.\d+\.\d+.*$`), ""},
-		{regexp.MustCompile(`_\d+\.\d+.*$`), ""},
-		{regexp.MustCompile(`-SNAPSHOT$`), ""},
-		{regexp.MustCompile(`_SNAPSHOT$`), ""},
-		{regexp.MustCompile(`-BUILD-\d+$`), ""},
-		{regexp.MustCompile(`_BUILD_\d+$`), ""},
-	}
-
-	result := nameNoExt
-	for _, p := range patterns {
+	result := strings.TrimSuffix(baseName, filepath.Ext(baseName))
+	for _, p := range jarVersionPatterns {
 		result = p.re.ReplaceAllString(result, p.rep)
 	}
+	return result
+}
 
-	return cleanName(result)
+func extractNameFromJar(jarFile string) string {
+	return cleanName(stripJarVersion(jarFile))
 }
 
 // extractNameFromMainClass derives a service name from a fully qualified

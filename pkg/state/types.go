@@ -36,9 +36,6 @@ const (
 	// HostStateFile is the file for host instrumentation state
 	HostStateFile = "host.json"
 
-	// DockerStateFile is the file for Docker instrumentation state
-	DockerStateFile = "docker.json"
-
 	// StateVersion is the current state format version
 	StateVersion = "1.0"
 )

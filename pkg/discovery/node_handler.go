@@ -5,6 +5,7 @@
 package discovery
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,21 +21,11 @@ type NodeHandler struct{}
 func (h *NodeHandler) Lang() Language { return LangNode }
 
 // Detect returns true if the process is a Node.js process, identified
-// by executable name (node, nodejs) or command patterns (npm, yarn, npx).
+// by executable name (node, nodejs). Package managers (npm, yarn, etc.)
+// resolve to the node binary via symlink/shebang, so ExeName is always
+// "node" — no cmdline pattern matching needed.
 func (h *NodeHandler) Detect(proc *ProcessInfo) bool {
-	exeLower := strings.ToLower(proc.ExeName)
-	if nodeExecutables[exeLower] {
-		return true
-	}
-
-	cmdLower := strings.ToLower(proc.CmdLine)
-	for _, pattern := range nodeCmdPatterns {
-		if strings.Contains(cmdLower, pattern) {
-			return true
-		}
-	}
-
-	return false
+	return nodeExecutables[strings.ToLower(proc.ExeName)]
 }
 
 // Enrich populates a Process struct with Node.js-specific details.
@@ -78,16 +69,25 @@ func (h *NodeHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 			ContainerInfo:     cached.ContainerInfo,
 
 			Details: map[string]any{
-				DetailEntryPoint:       cached.EntryPoint,
-				DetailProcessManager:   cached.ServiceType,
-				DetailIsPM2:            cached.ServiceType == "pm2",
-				DetailIsForever:        cached.ServiceType == "forever",
+				DetailEntryPoint:          cached.EntryPoint,
+				DetailProcessManager:      cached.ServiceType,
+				DetailIsPM2:               cached.ServiceType == "pm2",
+				DetailIsForever:           cached.ServiceType == "forever",
+				DetailSystemdUnit:         cached.SystemdUnit,
+				DetailExplicitServiceName: cached.ExplicitServiceName,
+				DetailWorkingDirectory:    cached.WorkingDirectory,
+				DetailPackageName:         cached.PackageName,
 			},
 		}
 	}
 
 	// Slow path
 	if isIgnoredSystemdUnit(pid) {
+		CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{Ignore: true})
+		return nil
+	}
+
+	if isNodeLauncher(cmdArgs) {
 		CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{Ignore: true})
 		return nil
 	}
@@ -123,32 +123,30 @@ func (h *NodeHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detector 
 			if opts.ExcludeContainers && containerInfo.IsContainer {
 				return nil
 			}
-
-			if containerInfo.IsContainer && containerInfo.ContainerID != "" {
-				name := detector.GetContainerNameByID(containerInfo.ContainerID, containerInfo.Runtime)
-				if name != "" {
-					proc.ContainerInfo.ContainerName = strings.TrimPrefix(name, "/")
-				}
-			}
 		}
 	}
 
 	h.extractNodeInfo(proc, cmdArgs)
+	enrichCommonDetails(proc)
 	h.extractServiceName(proc, cmdArgs)
 	h.detectProcessManager(proc, cmdArgs)
 	h.detectInstrumentation(proc, cmdArgs)
 
 	// Populate cache
 	CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{
-		ServiceName:       proc.ServiceName,
-		ServiceType:       proc.DetailString(DetailProcessManager),
-		RuntimeVersion:    proc.RuntimeVersion,
-		EntryPoint:        proc.DetailString(DetailEntryPoint),
-		HasAgent:          proc.HasAgent,
-		IsMiddlewareAgent: proc.IsMiddlewareAgent,
-		AgentPath:         proc.AgentPath,
-		ContainerInfo:     proc.ContainerInfo,
-		Owner:             proc.Owner,
+		ServiceName:         proc.ServiceName,
+		ServiceType:         proc.DetailString(DetailProcessManager),
+		RuntimeVersion:      proc.RuntimeVersion,
+		EntryPoint:          proc.DetailString(DetailEntryPoint),
+		HasAgent:            proc.HasAgent,
+		IsMiddlewareAgent:   proc.IsMiddlewareAgent,
+		AgentPath:           proc.AgentPath,
+		ContainerInfo:       proc.ContainerInfo,
+		Owner:               proc.Owner,
+		SystemdUnit:         proc.DetailString(DetailSystemdUnit),
+		ExplicitServiceName: proc.DetailString(DetailExplicitServiceName),
+		WorkingDirectory:    proc.DetailString(DetailWorkingDirectory),
+		PackageName:         proc.DetailString(DetailPackageName),
 	})
 
 	return proc
@@ -176,9 +174,9 @@ func (h *NodeHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 
 	// Handle Container Infrastructure
 	if proc.IsInContainer() {
-		serviceType = "docker"
-		if proc.ContainerInfo.ContainerID != "" {
-			key = fmt.Sprintf("docker-node-%s", proc.ContainerInfo.ContainerID[:12])
+		serviceType = "docker" //should be "container" - TODO: change this
+		if proc.ContainerInfo.ContainerID != "" && len(proc.ContainerInfo.ContainerID) >= 12 {
+			key = fmt.Sprintf("container-node-%s", proc.ContainerInfo.ContainerID[:12])
 			serviceName = proc.ContainerInfo.ContainerName
 		}
 	}
@@ -201,6 +199,8 @@ func (h *NodeHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 		Instrumented:      proc.HasAgent,
 		Key:               key,
 		SystemdUnit:       unitname,
+		Listeners:         proc.Listeners(),
+		Fingerprint:       proc.Fingerprint(),
 	}
 }
 
@@ -219,20 +219,20 @@ func (h *NodeHandler) extractNodeInfo(proc *Process, cmdArgs []string) {
 			continue
 		}
 
-		if strings.HasSuffix(arg, ".js") || strings.HasSuffix(arg, ".mjs") || strings.HasSuffix(arg, ".ts") {
-			entryPoint = arg
+		// First positional arg after "node" is the entry point — whether
+		// it's "index.js", "server.mjs", or an extensionless script like
+		// "codegraph" (npm-installed CLI with #!/usr/bin/env node shebang).
+		entryPoint = arg
 
-			if !filepath.IsAbs(entryPoint) {
-				if absPath, err := filepath.Abs(entryPoint); err == nil {
-					workingDirectory = filepath.Dir(absPath)
-					entryPoint = filepath.Base(absPath)
-				}
-			} else {
-				workingDirectory = filepath.Dir(entryPoint)
-				entryPoint = filepath.Base(entryPoint)
-			}
-			break
+		if filepath.IsAbs(entryPoint) {
+			workingDirectory = filepath.Dir(entryPoint)
+			entryPoint = filepath.Base(entryPoint)
+		} else if workingDirectory != "" {
+			absPath := filepath.Join(workingDirectory, entryPoint)
+			workingDirectory = filepath.Dir(absPath)
+			entryPoint = filepath.Base(absPath)
 		}
+		break
 	}
 
 	proc.Details[DetailEntryPoint] = entryPoint
@@ -242,9 +242,24 @@ func (h *NodeHandler) extractNodeInfo(proc *Process, cmdArgs []string) {
 		packageJsonPath := filepath.Join(workingDirectory, "package.json")
 		proc.Details[DetailPackageJsonPath] = packageJsonPath
 
-		if _, err := os.Stat(packageJsonPath); err == nil {
-			proc.Details[DetailPackageName] = "unknown"
-			proc.Details[DetailPackageVersion] = "unknown"
+		// Skip reading package.json for containerized processes — the path
+		// is inside the container's mount namespace and doesn't exist on the
+		// host. Container name already provides identity via ContainerInfo.
+		if !proc.IsInContainer() {
+			if data, err := os.ReadFile(packageJsonPath); err == nil {
+				var pkg struct {
+					Name    string `json:"name"`
+					Version string `json:"version"`
+				}
+				if json.Unmarshal(data, &pkg) == nil {
+					if pkg.Name != "" {
+						proc.Details[DetailPackageName] = pkg.Name
+					}
+					if pkg.Version != "" {
+						proc.Details[DetailPackageVersion] = pkg.Version
+					}
+				}
+			}
 		}
 	}
 }
@@ -278,7 +293,7 @@ func (h *NodeHandler) extractServiceName(proc *Process, cmdArgs []string) {
 
 	workDir := proc.DetailString(DetailWorkingDirectory)
 	if workDir != "" {
-		if name := extractNameFromDir(workDir); name != "" {
+		if name := serviceNameFromWorkDir(workDir); name != "" {
 			proc.ServiceName = name
 			return
 		}
@@ -391,14 +406,58 @@ var nodeExecutables = map[string]bool{
 	"nodejs": true,
 }
 
-// nodeCmdPatterns lists command line patterns that indicate a Node.js process.
-var nodeCmdPatterns = []string{
-	"node ",
-	"npm start",
-	"npm run",
-	"npx ",
-	"yarn start",
-	"yarn run",
+// nodeLaunchers lists argv[0] values that identify Node.js infrastructure
+// processes (package managers, process managers) rather than application
+// processes. PM2's God Daemon rewrites its argv[0] to
+// "PM2 v<version>: God Daemon (...)", so the first word is "pm2".
+var nodeLaunchers = map[string]bool{
+	"npm":      true,
+	"npx":      true,
+	"yarn":     true,
+	"pnpm":     true,
+	"corepack": true,
+	"pm2":      true,
+}
+
+// pm2Binaries lists executable basenames for PM2 entry points. When node
+// runs one of these as a script (e.g. "node /usr/local/bin/pm2-runtime"),
+// the process is a PM2 daemon — not an application. Its listen ports flow
+// to workers via InheritParentPorts.
+var pm2Binaries = map[string]bool{
+	"pm2":         true,
+	"pm2-runtime": true,
+	"pm2-dev":     true,
+}
+
+// isNodeLauncher returns true if the process is a Node.js package manager
+// launcher (npm start, yarn run, etc.) rather than an actual application.
+func isNodeLauncher(cmdArgs []string) bool {
+	if len(cmdArgs) == 0 {
+		return false
+	}
+	// When launched via "sh -c npm start", /proc/<pid>/cmdline may contain
+	// "npm start" as a single space-joined arg instead of null-separated.
+	// Extract the first word to handle both forms.
+	first := strings.ToLower(cmdArgs[0])
+	if i := strings.IndexByte(first, ' '); i > 0 {
+		first = first[:i]
+	}
+	if nodeLaunchers[first] {
+		return true
+	}
+
+	// When node runs a launcher script (e.g. "node /usr/local/bin/pm2-runtime"),
+	// cmdArgs[0] is "node" which passes the check above. Detect PM2 daemon
+	// processes by checking the first positional argument's basename.
+	for _, arg := range cmdArgs[1:] {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		base := strings.ToLower(filepath.Base(arg))
+		return pm2Binaries[base]
+	}
+
+	return false
 }
 
 // extractNodeServiceNameFromCmdArgs extracts a service name from Node.js

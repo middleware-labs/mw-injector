@@ -3,7 +3,13 @@
 // semantic conventions; language-specific metadata lives in the Details map.
 package discovery
 
-import "time"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"sort"
+	"strings"
+	"time"
+)
 
 // Detail key constants for language-specific metadata stored in Process.Details.
 // Each language handler populates the keys relevant to its language.
@@ -28,15 +34,18 @@ const (
 	DetailIsForever        = "is_forever"
 
 	// Python detail keys
-	DetailModulePath   = "module_path"
-	DetailVenvPath     = "venv_path"
-	DetailIsGunicorn   = "is_gunicorn"
-	DetailIsUvicorn    = "is_uvicorn"
-	DetailIsCelery     = "is_celery"
+	DetailModulePath    = "module_path"
+	DetailVenvPath      = "venv_path"
+	DetailIsGunicorn    = "is_gunicorn"
+	DetailIsUvicorn     = "is_uvicorn"
+	DetailIsCelery      = "is_celery"
 	DetailPythonVersion = "python_version"
 
 	// Common detail keys shared across languages
-	DetailProcessManager = "process_manager"
+	DetailProcessManager      = "process_manager"
+	DetailListeners           = "listeners" // []Listener — TCP/UDP sockets the process is listening on
+	DetailSystemdUnit         = "systemd_unit"
+	DetailExplicitServiceName = "explicit_service_name"
 )
 
 // Process represents a discovered process of any supported language.
@@ -116,6 +125,54 @@ func (p *Process) GetContainerName() string {
 	return ""
 }
 
+// Fingerprint returns a stable identity hash for this process that represents
+// workload class identity (not instance identity). It uses an additive formula:
+// all available signals are hashed together so no single missing field can
+// cause a collision. Version-agnostic: runtime upgrades and jar version bumps
+// do not change the fingerprint. Ports and PIDs are excluded.
+func (p *Process) Fingerprint() string {
+	parts := []string{string(p.Language)}
+
+	if unit := p.DetailString(DetailSystemdUnit); unit != "" {
+		parts = append(parts, unit)
+	}
+	if p.ContainerInfo != nil && p.ContainerInfo.ContainerName != "" {
+		parts = append(parts, p.ContainerInfo.ContainerName)
+	}
+
+	switch p.Language {
+	case LangJava:
+		if jar := p.DetailString(DetailJarFile); jar != "" {
+			parts = append(parts, stripJarVersion(jar))
+		}
+		if mc := p.DetailString(DetailMainClass); mc != "" {
+			parts = append(parts, mc)
+		}
+	case LangNode:
+		if pkg := p.DetailString(DetailPackageName); pkg != "" && pkg != "unknown" {
+			parts = append(parts, pkg)
+		}
+		if ep := p.DetailString(DetailEntryPoint); ep != "" {
+			parts = append(parts, ep)
+		}
+	case LangPython:
+		if mp := p.DetailString(DetailModulePath); mp != "" {
+			parts = append(parts, mp)
+		}
+		if ep := p.DetailString(DetailEntryPoint); ep != "" {
+			parts = append(parts, ep)
+		}
+	}
+
+	if cwd := p.DetailString(DetailWorkingDirectory); cwd != "" {
+		parts = append(parts, cwd)
+	}
+
+	sort.Strings(parts[1:])
+	h := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(h[:8])
+}
+
 // DetailString returns the string value for a detail key, or "" if missing or wrong type.
 func (p *Process) DetailString(key string) string {
 	if p.Details == nil {
@@ -136,6 +193,19 @@ func (p *Process) DetailBool(key string) bool {
 	v, ok := p.Details[key].(bool)
 	if !ok {
 		return false
+	}
+	return v
+}
+
+// Listeners returns the TCP/UDP listening sockets detected for this process,
+// or nil if none were found or detection was skipped.
+func (p *Process) Listeners() []Listener {
+	if p.Details == nil {
+		return nil
+	}
+	v, ok := p.Details[DetailListeners].([]Listener)
+	if !ok {
+		return nil
 	}
 	return v
 }

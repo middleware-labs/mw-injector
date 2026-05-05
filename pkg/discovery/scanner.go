@@ -72,15 +72,7 @@ func readProcDetails(pid int32) (ProcessInfo, bool) {
 		return ProcessInfo{}, false
 	}
 
-	// /proc/<pid>/cmdline uses null bytes as separators.
-	// Build both a space-joined string and an arg slice.
-	var args []string
-	for _, seg := range strings.Split(string(cmdlineRaw), "\x00") {
-		if seg != "" {
-			args = append(args, seg)
-		}
-	}
-	cmdline := strings.Join(args, " ")
+	args, cmdline := parseCmdline(cmdlineRaw, filepath.Base(exePath))
 
 	environ := readSelectedEnviron(pid)
 
@@ -136,4 +128,25 @@ func readSelectedEnviron(pid int32) map[string]string {
 		return nil
 	}
 	return result
+}
+
+// parseCmdline splits raw /proc/<pid>/cmdline bytes into an arg slice and a
+// space-joined command string. Process managers like PM2 overwrite the argv
+// buffer with a single space-joined string (e.g. "node /path/to/index.js\0"
+// instead of "node\0/path/to/index.js\0"). When this is detected — a single
+// arg whose first word matches exeName — the arg is re-split on whitespace
+// to recover the original arguments.
+func parseCmdline(raw []byte, exeName string) (args []string, cmdline string) {
+	for seg := range strings.SplitSeq(string(raw), "\x00") {
+		if seg != "" {
+			args = append(args, seg)
+		}
+	}
+
+	if len(args) == 1 && strings.HasPrefix(args[0], exeName+" ") {
+		args = strings.Fields(args[0])
+	}
+
+	cmdline = strings.Join(args, " ")
+	return
 }

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/middleware-labs/java-injector/pkg/discovery"
 )
@@ -27,8 +28,15 @@ type PythonSystemdInjector struct {
 }
 
 func NewPythonSystemdInjector() (*PythonSystemdInjector, error) {
+	return NewPythonSystemdInjectorWithLogger(nil)
+}
+
+// NewPythonSystemdInjectorWithLogger is like NewPythonSystemdInjector but
+// threads an optional slog logger through the discovery call so timing
+// records are emitted. A nil logger disables logging.
+func NewPythonSystemdInjectorWithLogger(logger *slog.Logger) (*PythonSystemdInjector, error) {
 	ctx := context.Background()
-	pythonProcs, err := discovery.FindProcessesByLanguage(ctx, discovery.LangPython)
+	pythonProcs, err := discovery.FindProcessesByLanguageWithLogger(ctx, discovery.LangPython, logger)
 	if err != nil {
 		return nil, fmt.Errorf("error creating PythonSystemdInjector: %w", err)
 	}

@@ -91,11 +91,15 @@ func (h *PythonHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detecto
 			ContainerInfo:     cached.ContainerInfo,
 
 			Details: map[string]any{
-				DetailEntryPoint:     cached.EntryPoint,
-				DetailProcessManager: cached.ServiceType,
-				DetailIsGunicorn:     cached.ServiceType == "gunicorn",
-				DetailIsUvicorn:      cached.ServiceType == "uvicorn",
-				DetailIsCelery:       cached.ServiceType == "celery",
+				DetailEntryPoint:          cached.EntryPoint,
+				DetailProcessManager:      cached.ServiceType,
+				DetailIsGunicorn:          cached.ServiceType == "gunicorn",
+				DetailIsUvicorn:           cached.ServiceType == "uvicorn",
+				DetailIsCelery:            cached.ServiceType == "celery",
+				DetailSystemdUnit:         cached.SystemdUnit,
+				DetailExplicitServiceName: cached.ExplicitServiceName,
+				DetailWorkingDirectory:    cached.WorkingDirectory,
+				DetailModulePath:          cached.ModulePath,
 			},
 		}
 	}
@@ -131,13 +135,6 @@ func (h *PythonHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detecto
 		containerInfo, err := detector.IsProcessInContainer(pid)
 		if err == nil && containerInfo.IsContainer {
 			proc.ContainerInfo = containerInfo
-
-			if containerInfo.ContainerName == "" && containerInfo.ContainerID != "" {
-				name := detector.GetContainerNameByID(containerInfo.ContainerID, containerInfo.Runtime)
-				if name != "" {
-					proc.ContainerInfo.ContainerName = strings.TrimPrefix(name, "/")
-				}
-			}
 		}
 	}
 
@@ -150,22 +147,27 @@ func (h *PythonHandler) Enrich(info *ProcessInfo, opts DiscoveryOptions, detecto
 	}
 
 	h.extractPythonInfo(proc, cmdArgs)
+	enrichCommonDetails(proc)
 	h.extractServiceName(proc, cmdArgs)
 	h.detectProcessManager(proc, cmdArgs)
 	h.detectInstrumentation(proc, cmdArgs)
 
 	// Populate cache
 	CacheProcessMetadata(pid, alignedTime, ProcessCacheEntry{
-		ServiceName:       proc.ServiceName,
-		ServiceType:       proc.DetailString(DetailProcessManager),
-		RuntimeVersion:    proc.RuntimeVersion,
-		EntryPoint:        proc.DetailString(DetailEntryPoint),
-		HasAgent:          proc.HasAgent,
-		IsMiddlewareAgent: proc.IsMiddlewareAgent,
-		AgentPath:         proc.AgentPath,
-		AgentType:         proc.AgentType,
-		ContainerInfo:     proc.ContainerInfo,
-		Owner:             proc.Owner,
+		ServiceName:         proc.ServiceName,
+		ServiceType:         proc.DetailString(DetailProcessManager),
+		RuntimeVersion:      proc.RuntimeVersion,
+		EntryPoint:          proc.DetailString(DetailEntryPoint),
+		HasAgent:            proc.HasAgent,
+		IsMiddlewareAgent:   proc.IsMiddlewareAgent,
+		AgentPath:           proc.AgentPath,
+		AgentType:           proc.AgentType,
+		ContainerInfo:       proc.ContainerInfo,
+		Owner:               proc.Owner,
+		SystemdUnit:         proc.DetailString(DetailSystemdUnit),
+		ExplicitServiceName: proc.DetailString(DetailExplicitServiceName),
+		WorkingDirectory:    proc.DetailString(DetailWorkingDirectory),
+		ModulePath:          proc.DetailString(DetailModulePath),
 	})
 
 	return proc
@@ -191,6 +193,9 @@ func (h *PythonHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 
 	if proc.IsInContainer() {
 		serviceType = "docker"
+		if proc.ContainerInfo.ContainerID != "" && len(proc.ContainerInfo.ContainerID) >= 12 {
+			key = fmt.Sprintf("docker-python-%s", proc.ContainerInfo.ContainerID[:12])
+		}
 	} else if proc.DetailBool(DetailIsCelery) {
 		serviceType = "worker"
 	}
@@ -217,6 +222,8 @@ func (h *PythonHandler) ToServiceSetting(proc *Process) *ServiceSetting {
 		Key:            key,
 		ProcessManager: proc.DetailString(DetailProcessManager),
 		SystemdUnit:    unitname,
+		Listeners:      proc.Listeners(),
+		Fingerprint:    proc.Fingerprint(),
 	}
 }
 
@@ -227,23 +234,45 @@ func (h *PythonHandler) extractPythonInfo(proc *Process, cmdArgs []string) {
 		proc.Details[DetailVenvPath] = filepath.Dir(filepath.Dir(proc.ExecutablePath))
 	}
 
+	if cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", proc.PID)); err == nil {
+		proc.Details[DetailWorkingDirectory] = cwd
+	}
+
 	for i, arg := range cmdArgs {
-		if i == 0 || strings.HasPrefix(arg, "-") {
+		if i == 0 {
 			continue
 		}
 
-		if strings.HasSuffix(arg, ".py") {
-			proc.Details[DetailEntryPoint] = arg
-			if abs, err := filepath.Abs(arg); err == nil {
-				proc.Details[DetailWorkingDirectory] = filepath.Dir(abs)
-			}
-			break
+		if arg == "-m" && i+1 < len(cmdArgs) {
+			mod := cmdArgs[i+1]
+			proc.Details[DetailModulePath] = mod
+			proc.Details[DetailEntryPoint] = mod
+			return
 		}
 
-		if i > 0 && cmdArgs[i-1] == "-m" {
-			proc.Details[DetailModulePath] = arg
-			break
+		if strings.HasPrefix(arg, "-") {
+			continue
 		}
+
+		// Skip known Python tool names — the next positional arg is the
+		// real entry point (e.g. "uvicorn main:app" → entry point is "main:app").
+		argBase := filepath.Base(arg)
+		if pythonBinaries[strings.ToLower(argBase)] {
+			continue
+		}
+
+		proc.Details[DetailEntryPoint] = filepath.Base(arg)
+
+		if strings.HasSuffix(arg, ".py") {
+			if !filepath.IsAbs(arg) {
+				if cwd := proc.DetailString(DetailWorkingDirectory); cwd != "" {
+					proc.Details[DetailWorkingDirectory] = filepath.Dir(filepath.Join(cwd, arg))
+				}
+			} else {
+				proc.Details[DetailWorkingDirectory] = filepath.Dir(arg)
+			}
+		}
+		return
 	}
 }
 
@@ -320,9 +349,8 @@ func (h *PythonHandler) extractServiceName(proc *Process, cmdArgs []string) {
 	// Level 6: Working directory fallback
 	workDir := proc.DetailString(DetailWorkingDirectory)
 	if workDir != "" {
-		dirName := filepath.Base(workDir)
-		if !isGenericPython(dirName) && dirName != "." && dirName != "/" {
-			proc.ServiceName = dirName
+		if name := serviceNameFromWorkDir(workDir); name != "" {
+			proc.ServiceName = name
 			return
 		}
 	}

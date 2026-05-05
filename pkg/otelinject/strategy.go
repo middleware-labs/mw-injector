@@ -50,6 +50,7 @@ func NewStrategyRegistry() *StrategyRegistry {
 	return &StrategyRegistry{
 		strategies: []InstrumentationStrategy{
 			&SystemdDropinStrategy{},
+			NewOBIStrategy(),
 		},
 	}
 }
