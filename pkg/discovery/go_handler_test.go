@@ -8,31 +8,29 @@ import (
 func TestGoHandler_Detect(t *testing.T) {
 	h := &GoHandler{}
 
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatalf("os.Executable: %v", err)
-	}
+	// The test binary itself is a Go binary — use our own PID so
+	// Detect reads /proc/self/exe which points to the test binary.
+	selfPID := int32(os.Getpid())
 
-	// The test binary itself is a Go binary — should detect.
 	proc := &ProcessInfo{
-		PID:     1,
+		PID:     selfPID,
 		ExeName: "discovery.test",
-		ExePath: self,
-		CmdLine: self,
+		ExePath: "/proc/self/exe",
+		CmdLine: "discovery.test",
 	}
 	if !h.Detect(proc) {
 		t.Errorf("Detect should return true for Go test binary")
 	}
 
-	// A non-Go binary (e.g. /bin/sh) should not detect.
+	// PID 1 is init/systemd — not a Go binary.
 	proc = &ProcessInfo{
-		PID:     2,
-		ExeName: "sh",
-		ExePath: "/bin/sh",
-		CmdLine: "/bin/sh",
+		PID:     1,
+		ExeName: "systemd",
+		ExePath: "/usr/lib/systemd/systemd",
+		CmdLine: "/sbin/init",
 	}
 	if h.Detect(proc) {
-		t.Errorf("Detect should return false for /bin/sh")
+		t.Errorf("Detect should return false for systemd (PID 1)")
 	}
 }
 
@@ -71,6 +69,7 @@ func TestIsIgnoredGoBinary(t *testing.T) {
 		{"gopls", true},
 		{"gopls_0.21.1_go_1.26.2", true},
 		{"lazydocker", true},
+		{"esbuild", true},
 		{"myapp", false},
 		{"api-server", false},
 		{"billing-service", false},
