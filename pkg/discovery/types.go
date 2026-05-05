@@ -10,6 +10,7 @@ const (
 	LangJava   Language = "java"
 	LangNode   Language = "node"
 	LangPython Language = "python"
+	LangGo     Language = "go"
 )
 
 // --- Integration Detection (future use) ---

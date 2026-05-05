@@ -122,6 +122,7 @@ var obiLanguageMap = map[discovery.Language]string{
 	discovery.LangJava:   "java",
 	discovery.LangNode:   "nodejs",
 	discovery.LangPython: "python",
+	discovery.LangGo:     "go",
 }
 
 func buildOBISelector(service discovery.ServiceSetting, lang discovery.Language) OBISelector {
