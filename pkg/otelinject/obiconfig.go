@@ -218,6 +218,13 @@ func (c *OBIConfig) ensureInstrumentSeq() (*yaml.Node, error) {
 	if seq == nil {
 		seq = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
 		addMappingKey(disc, "instrument", seq)
+	} else if seq.Kind != yaml.SequenceNode {
+		// The key exists but is null/scalar (e.g., "instrument:" with no value).
+		// Convert it in-place to a sequence so selectors can be appended.
+		seq.Kind = yaml.SequenceNode
+		seq.Tag = "!!seq"
+		seq.Value = ""
+		seq.Content = nil
 	}
 
 	return seq, nil

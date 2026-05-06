@@ -11,6 +11,7 @@ const (
 	LangNode   Language = "node"
 	LangPython Language = "python"
 	LangGo     Language = "go"
+	LangRust   Language = "rust"
 )
 
 // --- Integration Detection (future use) ---
