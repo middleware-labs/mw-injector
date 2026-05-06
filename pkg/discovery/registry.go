@@ -53,6 +53,7 @@ func NewHandlerRegistry() *HandlerRegistry {
 			&RubyHandler{},
 			&GoHandler{},
 			&RustHandler{},
+			&PHPHandler{},
 		},
 	}
 }
