@@ -50,6 +50,7 @@ func NewHandlerRegistry() *HandlerRegistry {
 			&JavaHandler{},
 			&NodeHandler{},
 			&PythonHandler{},
+			&RubyHandler{},
 			&GoHandler{},
 			&RustHandler{},
 		},
