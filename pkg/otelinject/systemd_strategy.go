@@ -25,9 +25,15 @@ func (s *SystemdDropinStrategy) Name() string {
 	return "systemd-dropin"
 }
 
-// CanHandle returns true if the service has a systemd unit associated with it.
+// CanHandle returns true if the service has a systemd unit and is a language
+// that supports LD_PRELOAD-based injection (Java, Node, Python). Go binaries
+// are statically linked and don't support LD_PRELOAD — they require OBI.
 func (s *SystemdDropinStrategy) CanHandle(service discovery.ServiceSetting) bool {
-	return service.SystemdUnit != ""
+	if service.SystemdUnit == "" {
+		return false
+	}
+	lang := discovery.Language(service.Language)
+	return lang == discovery.LangJava || lang == discovery.LangNode || lang == discovery.LangPython
 }
 
 // ValidateAssets checks that required agent files are present for the given
