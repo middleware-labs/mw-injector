@@ -21,7 +21,7 @@ func InstrumentOBI(identifier string, lang Language, logger *slog.Logger) error 
 
 	setting, err := findServiceFrom(identifier, allSettings)
 	if err != nil {
-		return fmt.Errorf("service %q (language: %s) not found in discovered services", identifier, lang)
+		return fmt.Errorf("service %q (language: %s) not found in %d discovered services: %w", identifier, lang, len(allSettings), err)
 	}
 
 	setting.Listeners = collectPortsForFingerprint(setting.Fingerprint, allSettings)

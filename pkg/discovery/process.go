@@ -44,6 +44,10 @@ const (
 	DetailIsCelery      = "is_celery"
 	DetailPythonVersion = "python_version"
 
+	// PHP detail keys
+	DetailPHPPoolName = "php.pool_name"
+	DetailIsFPM       = "is_fpm"
+
 	// Common detail keys shared across languages
 	DetailProcessManager      = "process_manager"
 	DetailListeners           = "listeners" // []Listener — TCP/UDP sockets the process is listening on
@@ -179,6 +183,13 @@ func (p *Process) Fingerprint() string {
 			parts = append(parts, ep)
 		}
 		parts = append(parts, p.ExecutablePath)
+	case LangPHP:
+		if pool := p.DetailString(DetailPHPPoolName); pool != "" {
+			parts = append(parts, pool)
+		}
+		if ep := p.DetailString(DetailEntryPoint); ep != "" {
+			parts = append(parts, ep)
+		}
 	}
 
 	if cwd := p.DetailString(DetailWorkingDirectory); cwd != "" {

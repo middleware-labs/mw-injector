@@ -13,6 +13,7 @@ const (
 	LangGo     Language = "go"
 	LangRust   Language = "rust"
 	LangRuby   Language = "ruby"
+	LangPHP    Language = "php"
 )
 
 // --- Integration Detection (future use) ---
