@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MW Injector is a Go library for process discovery and auto-instrumentation on Linux hosts, used by the Middleware.io observability platform. It discovers Java/Node/Python applications across host processes, Docker/Podman containers, Tomcat deployments, and systemd services, and instruments them via systemd drop-ins or OBI (OpenTelemetry eBPF Instrumentation).
+MW Injector is a Go library for process discovery and auto-instrumentation on Linux hosts, used by the Middleware.io observability platform. It discovers Java/Node/Python/Rust applications across host processes, Docker/Podman containers, Tomcat deployments, and systemd services, and instruments them via systemd drop-ins or OBI (OpenTelemetry eBPF Instrumentation).
 
 Imported by **mw-agent** via `pkg/otelinject` — not used as a standalone CLI.
 
@@ -15,13 +15,17 @@ Imported by **mw-agent** via `pkg/otelinject` — not used as a standalone CLI.
 
 ```bash
 # Build all packages
-go build ./...
+make build              # or: go build ./...
 
 # Run all tests
-go test ./...
+make test               # or: go test ./...
 
 # Run tests with verbose output
-go test -v ./pkg/discovery
+make test-v             # or: go test -v ./pkg/discovery
+
+# Lint and vet
+make lint               # golangci-lint run ./...
+make vet                # go vet ./...
 
 # Run specific test
 go test -v ./pkg/discovery -run TestParseCommandLine
@@ -30,6 +34,7 @@ go test -v ./pkg/discovery -run TestParseCommandLine
 go test -v ./pkg/discovery -run TestJavaHandler
 go test -v ./pkg/discovery -run TestNodeHandler
 go test -v ./pkg/discovery -run TestPythonHandler
+go test -v ./pkg/discovery -run TestRustHandler
 go test -v ./pkg/discovery -run TestHandlerRegistry
 
 # OBI config tests
@@ -46,6 +51,7 @@ go test -v ./pkg/otelinject -run TestOBI
   - `java_handler.go` — Java handler: detection, enrichment, filtering, service name helpers
   - `node_handler.go` — Node.js handler: same pattern + Node-specific lookup tables
   - `python_handler.go` — Python handler: same pattern + PythonAgentType definitions
+  - `rust_handler.go` — Rust handler: ELF-based detection (`.comment` section + `lang_start` symbol), hybrid binary rejection
   - `process.go` — Unified `Process` struct (OTel semantic conventions + `Details` map + `Fingerprint()`)
   - `types.go` — `Language` enum, `IntegrationInspector`/`IntegrationRegistry`
   - `scanner.go` — /proc enumeration into `ProcessInfo` structs
@@ -62,7 +68,7 @@ go test -v ./pkg/otelinject -run TestOBI
   - `tomcat.go` — Tomcat-specific webapp scanning
   - `ports.go` — Network listener discovery via `/proc/<pid>/fd` + `/proc/<pid>/net/*`
 - **pkg/otelinject/** — OTel injection; primary integration point for mw-agent
-  - `interfaces.go` — `Language` alias (= discovery.Language), `OtelInjector` interface
+  - `interfaces.go` — `Language` alias (= discovery.Language), `OtelInjector` interface, language constants (Java, Python, Node, Go, Rust, PHP, Ruby)
   - `strategy.go` — `InstrumentationStrategy` interface + `StrategyRegistry`
   - `systemd_strategy.go` — `SystemdDropinStrategy` (instruments via systemd drop-in files)
   - `obi_strategy.go` — `OBIStrategy` (instruments via OBI YAML selectors + obi-agent restart); `obiLanguageMap` translates internal language constants to OTel semconv names for OBI
@@ -107,13 +113,16 @@ Node.js (node_handler.go `extractServiceName`):
 Python (python_handler.go `extractServiceName`):
 1. `OTEL_SERVICE_NAME`/`SERVICE_NAME`/`FLASK_APP` env → 2. Container name → 3. Virtualenv parent dir → 4. WSGI module / `.py` basename → 5. Script parent directory → 6. Working directory (last 2 meaningful segments via `serviceNameFromWorkDir`) → 7. `"python-service"`
 
+Rust (rust_handler.go `extractServiceName`):
+1. `OTEL_SERVICE_NAME`/`MW_SERVICE_NAME` env → 2. Container name → 3. Systemd unit name → 4. Executable basename (cargo names binaries after the crate) → 5. Working directory → 6. `"rust-service"`
+
 **Cgroup Unit Filtering:** `parseCgroupUnitName()` skips `user@*` (user session manager) and `app-*` (transient desktop units per [systemd Desktop Environment spec](https://systemd.io/DESKTOP_ENVIRONMENTS/)). This prevents desktop terminal tab names from being used as service names and ensures terminal-launched processes get `serviceType = "system"` (not "systemd").
 
 **Node.js Launcher Filtering:** `isNodeLauncher()` filters npm/npx/yarn/pnpm/corepack processes in `Enrich()` by checking `cmdArgs[0]`. These are package manager launchers whose exe resolves to `node` via symlink — they shadow the real app process in the settings map.
 
 **Service Lookup:** `findService()` in obi_api.go accepts either service name or fingerprint. Tries name match first; if ambiguous (same name, different fingerprints), requires fingerprint disambiguation.
 
-**Systemd Integration:** Drop-in files created at `/etc/systemd/system/{service}.service.d/middleware-otel.conf` using LD_PRELOAD for Java/Node or LD_PRELOAD + PYTHON_AUTO_INSTRUMENTATION_AGENT_PATH_PREFIX for Python.
+**Systemd Integration:** Drop-in files created at `/etc/systemd/system/{service}.service.d/middleware-otel.conf` using LD_PRELOAD for Java/Node or LD_PRELOAD + PYTHON_AUTO_INSTRUMENTATION_AGENT_PATH_PREFIX for Python. Only Java, Python, and Node support systemd drop-in instrumentation; other languages (Rust, Go, PHP, Ruby) must use OBI.
 
 **OBI Integration:** Selectors added to `/etc/obi-agent/config.yaml` under `discovery.instrument[]`. YAML round-tripped via `yaml.Node` to preserve comments and unrelated sections. OBI agent restarted via systemctl after config changes. OBI uses OTel semconv language names (`nodejs`, not `node`); the `obiLanguageMap` in `obi_strategy.go` handles the translation from internal language constants.
 
@@ -144,7 +153,7 @@ Python (python_handler.go `extractServiceName`):
 
 ## Adding New Features
 
-- **New language:** Implement `LanguageHandler` in `pkg/discovery/{lang}_handler.go`, register in `NewHandlerRegistry()`. No changes to core pipeline.
+- **New language:** Implement `LanguageHandler` in `pkg/discovery/{lang}_handler.go`, add `Lang{Name}` constant in `types.go`, add `Language{Name}` constant in `pkg/otelinject/interfaces.go`, register in `NewHandlerRegistry()`, add language mapping in `obiLanguageMap` in `obi_strategy.go`, and add to `resolveLanguage()` in mw-agent's `main.go`. For native-compiled languages (like Rust), detection requires ELF inspection and the handler must fall back to `/proc/<pid>/exe` for containerized processes whose readlinked path doesn't exist on the host. See `rust_handler.go` as reference.
 - **New instrumentation method:** Implement `InstrumentationStrategy` in `pkg/otelinject/{method}_strategy.go`, register in `NewStrategyRegistry()`.
 - **New container runtime:** Implement `ContainerClient` in `pkg/discovery/container_client_{runtime}.go`, add to `initContainerClients()`.
 - **New config field:** Extend `ProcessConfiguration` in `pkg/config/config.go`

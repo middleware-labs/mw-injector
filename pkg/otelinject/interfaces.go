@@ -16,6 +16,9 @@ const (
 	LanguageJava   Language = "java"
 	LanguageNode   Language = "node"
 	LanguageGo     Language = "go"
+	LanguageRust   Language = "rust"
+	LanguagePHP    Language = "php"
+	LanguageRuby   Language = "ruby"
 )
 
 // OtelInjector defines the contract for language-specific injectors. Each

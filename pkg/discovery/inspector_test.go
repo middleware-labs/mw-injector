@@ -230,7 +230,10 @@ func TestHandlerRegistry_ForLanguage(t *testing.T) {
 	if h := registry.ForLanguage(LangPython); h == nil {
 		t.Error("expected Python handler, got nil")
 	}
-	if h := registry.ForLanguage("rust"); h != nil {
+	if h := registry.ForLanguage(LangRust); h == nil {
+		t.Error("expected Rust handler, got nil")
+	}
+	if h := registry.ForLanguage("golang"); h != nil {
 		t.Error("expected nil for unregistered language, got non-nil")
 	}
 }

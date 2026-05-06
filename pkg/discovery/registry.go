@@ -51,6 +51,7 @@ func NewHandlerRegistry() *HandlerRegistry {
 			&NodeHandler{},
 			&PythonHandler{},
 			&GoHandler{},
+			&RustHandler{},
 		},
 	}
 }

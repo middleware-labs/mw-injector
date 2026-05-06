@@ -37,7 +37,7 @@ const (
 	DetailGoModule = "go.module"
 
 	// Python detail keys
-	DetailModulePath = "module_path"
+	DetailModulePath    = "module_path"
 	DetailVenvPath      = "venv_path"
 	DetailIsGunicorn    = "is_gunicorn"
 	DetailIsUvicorn     = "is_uvicorn"
@@ -170,6 +170,10 @@ func (p *Process) Fingerprint() string {
 			parts = append(parts, mod)
 		}
 		parts = append(parts, p.ExecutablePath)
+	case LangRust:
+		if ep := p.DetailString(DetailEntryPoint); ep != "" {
+			parts = append(parts, ep)
+		}
 	}
 
 	if cwd := p.DetailString(DetailWorkingDirectory); cwd != "" {
