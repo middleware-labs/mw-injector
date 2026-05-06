@@ -174,6 +174,11 @@ func (p *Process) Fingerprint() string {
 		if ep := p.DetailString(DetailEntryPoint); ep != "" {
 			parts = append(parts, ep)
 		}
+	case LangRuby:
+		if ep := p.DetailString(DetailEntryPoint); ep != "" {
+			parts = append(parts, ep)
+		}
+		parts = append(parts, p.ExecutablePath)
 	}
 
 	if cwd := p.DetailString(DetailWorkingDirectory); cwd != "" {
