@@ -248,3 +248,42 @@ func TestAccumulateByFingerprint(t *testing.T) {
 		}
 	})
 }
+
+func TestApplyStoredInstrumentThis(t *testing.T) {
+	stored := map[string]ServiceSetting{
+		"fp-web":     {ServiceName: "web", Language: "node", InstrumentThis: true, InstrumentationMode: "obi"},
+		"fp-api-old": {ServiceName: "api", Language: "java", InstrumentationMode: "otel-injector"},
+		"fp-dup-a":   {ServiceName: "dup", Language: "go", InstrumentationMode: "obi"},
+		"fp-dup-b":   {ServiceName: "dup", Language: "go", InstrumentationMode: "otel-injector"},
+		"fp-gone":    {ServiceName: "gone", Language: "python", InstrumentThis: true, InstrumentationMode: "obi"},
+	}
+	current := map[string]ServiceSetting{
+		"fp-web":     {ServiceName: "web", Language: "node"},
+		"fp-api-new": {ServiceName: "api", Language: "java"}, // fingerprint changed
+		"fp-dup-a":   {ServiceName: "dup", Language: "go"},
+		"fp-dup-b":   {ServiceName: "dup", Language: "go"},
+		"fp-new":     {ServiceName: "new", Language: "python"},
+	}
+
+	got := ApplyStoredInstrumentThis(stored, current)
+
+	want := map[string]struct {
+		ticked bool
+		mode   string
+	}{
+		"fp-web":     {true, "obi"},
+		"fp-api-new": {false, "otel-injector"},
+		"fp-dup-a":   {false, "obi"},
+		"fp-dup-b":   {false, "otel-injector"},
+		"fp-new":     {false, ""},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d services, want %d", len(got), len(want))
+	}
+	for key, w := range want {
+		if got[key].InstrumentThis != w.ticked || got[key].InstrumentationMode != w.mode {
+			t.Errorf("%s: instrument_this=%v mode=%q, want %v %q",
+				key, got[key].InstrumentThis, got[key].InstrumentationMode, w.ticked, w.mode)
+		}
+	}
+}

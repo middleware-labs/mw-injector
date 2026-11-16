@@ -47,6 +47,8 @@ type ServiceSetting struct {
 	ProcessManager      string     `json:"process_manager,omitempty"`
 	Listeners           []Listener `json:"listeners,omitempty"` // ports
 	InstrumentationType string     `json:"instrumentation_type,omitempty"`
+	// Mode the user picked on the Linux agent screen ("obi" or "otel-injector").
+	InstrumentationMode string     `json:"instrumentation_mode,omitempty"`
 	Fingerprint         string             `json:"fingerprint,omitempty"`
 	IntegrationType     string             `json:"integration_type,omitempty"`
 	Instances           []ReportInstanceInfo `json:"instances,omitempty"`
@@ -72,7 +74,6 @@ type IntegrationSetting struct {
 
 // OSConfig represents the configuration and status for a specific OS (e.g., "linux").
 type OSConfig struct {
-	AgentRestartStatus          bool                             `json:"agent_restart_status"`
 	AutoInstrumentationInit     bool                             `json:"auto_instrumentation_init"`
 	AutoInstrumentationSettings map[string]ServiceSetting        `json:"auto_instrumentation_settings"`
 	Integrations                []IntegrationSetting             `json:"integrations,omitempty"`
@@ -174,7 +175,6 @@ func GetAgentReportValueWithLogger(logger *slog.Logger) (AgentReportValue, error
 	osKey := runtime.GOOS
 	reportValue := AgentReportValue{
 		osKey: OSConfig{
-			AgentRestartStatus:          false,
 			AutoInstrumentationInit:     true,
 			AutoInstrumentationSettings: settings,
 			Integrations:                integrations,
@@ -184,9 +184,9 @@ func GetAgentReportValueWithLogger(logger *slog.Logger) (AgentReportValue, error
 	return reportValue, discoverErrs
 }
 
-// ApplyStoredInstrumentThis merges instrument_this flags from storedSettings into
-// currentSettings. All current services are returned; instrument_this is set to true
-// only when a stored entry with a matching (service_name, language) has InstrumentThis=true.
+// ApplyStoredInstrumentThis carries the user's choices (instrument_this and
+// instrumentation_mode) from storedSettings into currentSettings, matched on
+// (service_name, language). All current services are returned.
 func ApplyStoredInstrumentThis(
 	storedSettings map[string]ServiceSetting,
 	currentSettings map[string]ServiceSetting,
@@ -195,17 +195,29 @@ func ApplyStoredInstrumentThis(
 		ServiceName string
 		Language    string
 	}
-	storedIndex := make(map[serviceIdentity]bool, len(storedSettings))
+	storedTicked := make(map[serviceIdentity]bool, len(storedSettings))
+	storedMode := make(map[serviceIdentity]string, len(storedSettings))
 	for _, s := range storedSettings {
+		id := serviceIdentity{s.ServiceName, s.Language}
 		if s.InstrumentThis {
-			storedIndex[serviceIdentity{s.ServiceName, s.Language}] = true
+			storedTicked[id] = true
+		}
+		if s.InstrumentationMode != "" {
+			storedMode[id] = s.InstrumentationMode
 		}
 	}
 
 	result := make(map[string]ServiceSetting, len(currentSettings))
 	for k, current := range currentSettings {
-		if storedIndex[serviceIdentity{current.ServiceName, current.Language}] {
+		id := serviceIdentity{current.ServiceName, current.Language}
+		if storedTicked[id] {
 			current.InstrumentThis = true
+		}
+		// The same key (fingerprint) is the exact service; fall back to the identity.
+		if same, ok := storedSettings[k]; ok && same.InstrumentationMode != "" && id == (serviceIdentity{same.ServiceName, same.Language}) {
+			current.InstrumentationMode = same.InstrumentationMode
+		} else if mode := storedMode[id]; mode != "" {
+			current.InstrumentationMode = mode
 		}
 		result[k] = current
 	}
